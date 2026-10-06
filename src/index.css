@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    background-color: #0c0a15;
+    color: #f1f5f9;
+  }
+}
+
+/* Custom sleek scrollbar for dark aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0f0d1a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2a2444;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3666;
+}
+
+/* Focus Mode CSS Selection */
+div#root:nth-of-type(1) > div:nth-of-type(1) > div:nth-of-type(2) > div:nth-of-type(1) > div:nth-of-type(4) {
+  color: #922222;
+}
+
+/* Glowing Living Progress Line */
+@keyframes liveLine {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: -200% 0%;
+  }
+}
+
+.live-progress-line {
+  background: linear-gradient(
+    90deg,
+    #f59e0b 0%,
+    #ef4444 25%,
+    #ec4899 50%,
+    #8b5cf6 75%,
+    #f59e0b 100%
+  );
+  background-size: 200% auto;
+  animation: liveLine 3s linear infinite;
+  box-shadow: 0 0 10px rgba(236, 72, 153, 0.6), 0 0 4px rgba(139, 92, 246, 0.4);
+}

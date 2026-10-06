@@ -1,0 +1,8 @@
+{
+  "name": "RemindTask - Pengingat Tugas \u0026 Manajemen Kelas",
+  "description": "Aplikasi pengingat tugas terpadu dengan peran Member, Admin, dan Owner, integrasi kalender interaktif, analitik produktivitas, serta notifikasi otomatis real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
