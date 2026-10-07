@@ -67,31 +67,44 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
   const fileCategory = getFileCategory(fileName, fileUrl);
   const fileExt = fileName.split('.').pop()?.toUpperCase() || 'FILE';
 
+  const getScrollPos = () => {
+    const mainEl = document.querySelector('main');
+    const mainScroll = mainEl ? mainEl.scrollTop : 0;
+    const winScroll =
+      window.scrollY ||
+      document.documentElement.scrollTop ||
+      document.body.scrollTop ||
+      0;
+    return { mainScroll, winScroll };
+  };
+
+  const applyScrollRestore = (pos: { mainScroll: number; winScroll: number }) => {
+    const doRestore = () => {
+      const mainEl = document.querySelector('main');
+      if (mainEl && pos.mainScroll > 0) {
+        mainEl.scrollTop = pos.mainScroll;
+      }
+      if (pos.winScroll > 0) {
+        window.scrollTo({ top: pos.winScroll, behavior: 'instant' });
+      }
+    };
+    doRestore();
+    requestAnimationFrame(doRestore);
+    setTimeout(doRestore, 30);
+    setTimeout(doRestore, 100);
+    setTimeout(doRestore, 250);
+  };
+
   const handleApprove = (e?: React.MouseEvent) => {
     if (e) {
       e.preventDefault();
       e.stopPropagation();
     }
 
-    // Capture current scroll position from both window and main container into state
-    const currentScrollY =
-      window.scrollY ||
-      document.documentElement.scrollTop ||
-      document.querySelector('main')?.scrollTop ||
-      0;
-    setSavedScrollPos(currentScrollY);
-
+    const pos = getScrollPos();
     moderateSubmission(submission.id, 'completed', feedback);
     onClose();
-
-    // Reapply scroll position after DOM update
-    requestAnimationFrame(() => {
-      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
-      const mainEl = document.querySelector('main');
-      if (mainEl && currentScrollY > 0) {
-        mainEl.scrollTop = currentScrollY;
-      }
-    });
+    applyScrollRestore(pos);
   };
 
   const handleRevision = (e?: React.MouseEvent) => {
@@ -100,27 +113,14 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
       e.stopPropagation();
     }
 
-    const currentScrollY =
-      window.scrollY ||
-      document.documentElement.scrollTop ||
-      document.querySelector('main')?.scrollTop ||
-      0;
-    setSavedScrollPos(currentScrollY);
-
+    const pos = getScrollPos();
     moderateSubmission(
       submission.id,
       'revision',
       feedback || 'Perlu perbaikan berkas atau kelengkapan data.'
     );
     onClose();
-
-    requestAnimationFrame(() => {
-      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
-      const mainEl = document.querySelector('main');
-      if (mainEl && currentScrollY > 0) {
-        mainEl.scrollTop = currentScrollY;
-      }
-    });
+    applyScrollRestore(pos);
   };
 
   const handleReject = (e?: React.MouseEvent) => {
@@ -129,27 +129,14 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
       e.stopPropagation();
     }
 
-    const currentScrollY =
-      window.scrollY ||
-      document.documentElement.scrollTop ||
-      document.querySelector('main')?.scrollTop ||
-      0;
-    setSavedScrollPos(currentScrollY);
-
+    const pos = getScrollPos();
     moderateSubmission(
       submission.id,
       'rejected',
       feedback || 'Pengajuan tugas ditolak karena tidak sesuai kriteria.'
     );
     onClose();
-
-    requestAnimationFrame(() => {
-      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
-      const mainEl = document.querySelector('main');
-      if (mainEl && currentScrollY > 0) {
-        mainEl.scrollTop = currentScrollY;
-      }
-    });
+    applyScrollRestore(pos);
   };
 
   const handleDownload = () => {

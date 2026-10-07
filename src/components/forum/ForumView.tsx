@@ -2,7 +2,6 @@ import React, { useState, useMemo } from 'react';
 import {
   MessageSquare,
   Heart,
-  Share2,
   Tag,
   Plus,
   Send,
@@ -214,7 +213,15 @@ export const ForumView: React.FC = () => {
           } else {
             const myClassId = currentClass?.id || currentUser?.classId;
             const myClassCode = currentClass?.code;
-            if (myClassId && p.classId && p.classId !== myClassId && p.classId !== myClassCode) return false;
+            const myClassName = currentClass?.name || currentUser?.className;
+
+            if (!myClassId && !myClassCode && !myClassName) return false;
+
+            const matchesId = Boolean(myClassId && p.classId === myClassId);
+            const matchesCode = Boolean(myClassCode && p.classId === myClassCode);
+            const matchesName = Boolean(myClassName && p.className === myClassName);
+
+            if (!matchesId && !matchesCode && !matchesName) return false;
           }
         } else {
           // Forum Global: ALL users accessing RemindTask can see all global posts!
@@ -266,22 +273,32 @@ export const ForumView: React.FC = () => {
 
     setIsSubmitting(true);
     try {
+      if (postScope === 'class' && currentRole !== 'owner') {
+        const myClassId = currentClass?.id || currentUser?.classId || currentClass?.code;
+        if (!myClassId) {
+          showToast('Anda belum terhubung ke Ruang Kelas. Silakan masukkan Kode Kelas dari Admin terlebih dahulu atau pilih Forum Global!', 'warn');
+          setIsSubmitting(false);
+          return;
+        }
+      }
+
       const parsedTags = postTags
         .split(',')
         .map((t) => t.trim().replace(/^#/, ''))
         .filter((t) => t.length > 0);
 
+      const myClassId = currentClass?.id || currentUser?.classId || currentClass?.code;
       const targetClassObj = classes.find((c) => c.id === ownerTargetClassId) || currentClass;
       const finalClassId =
         postScope === 'class'
           ? currentRole === 'owner'
-            ? ownerTargetClassId || 'class-1'
-            : currentClass?.id || 'class-1'
+            ? ownerTargetClassId || classes[0]?.id || 'class-1'
+            : myClassId || 'class-1'
           : 'global';
 
       const finalClassName =
         postScope === 'class'
-          ? targetClassObj?.name || currentClass?.name || 'Ruang Kelas'
+          ? targetClassObj?.name || currentClass?.name || currentUser?.className || 'Ruang Kelas'
           : 'Global Platform';
 
       await addForumPost({
@@ -453,23 +470,40 @@ export const ForumView: React.FC = () => {
       {/* Instagram-Style Post Feed Grid */}
       <div className="space-y-6">
         {filteredPosts.length === 0 ? (
-          <div className="text-center py-16 bg-[#141126] border border-[#272144] rounded-3xl p-8 space-y-3">
-            <MessageSquare className="w-12 h-12 text-slate-600 mx-auto" />
-            <h4 className="text-base font-bold text-white">Belum Ada Postingan di Forum Ini</h4>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              Jadilah yang pertama membagikan materi diskusi, portofolio karya, atau informasi layanan akademik di forum ini.
-            </p>
-            <button
-              onClick={() => {
-                setPostScope(activeScope);
-                setIsCreateModalOpen(true);
-              }}
-              className="px-5 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-md"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Buat Postingan Pertama</span>
-            </button>
-          </div>
+          activeScope === 'class' && !currentClass && !currentUser?.classId && currentRole !== 'owner' ? (
+            <div className="text-center py-16 bg-[#141126] border border-[#272144] rounded-3xl p-8 space-y-3">
+              <Building2 className="w-12 h-12 text-amber-500/80 mx-auto" />
+              <h4 className="text-base font-bold text-white">Anda Belum Terhubung ke Ruang Kelas</h4>
+              <p className="text-xs text-slate-300 max-w-sm mx-auto">
+                Forum Kelas hanya dapat dilihat oleh siswa/anggota yang telah terhubung melalui Kode Kelas dari Admin/Guru. Masukkan kode kelas Anda di Beranda atau beralih ke <strong>Forum Global</strong> untuk melihat postingan umum seluruh pengguna!
+              </p>
+              <button
+                onClick={() => setActiveScope('global')}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+              >
+                <Globe className="w-4 h-4 text-cyan-300" />
+                <span>Buka Forum Global Platform</span>
+              </button>
+            </div>
+          ) : (
+            <div className="text-center py-16 bg-[#141126] border border-[#272144] rounded-3xl p-8 space-y-3">
+              <MessageSquare className="w-12 h-12 text-slate-600 mx-auto" />
+              <h4 className="text-base font-bold text-white">Belum Ada Postingan di Forum Ini</h4>
+              <p className="text-xs text-slate-400 max-w-sm mx-auto">
+                Jadilah yang pertama membagikan materi diskusi, portofolio karya, atau informasi layanan akademik di forum ini.
+              </p>
+              <button
+                onClick={() => {
+                  setPostScope(activeScope);
+                  setIsCreateModalOpen(true);
+                }}
+                className="px-5 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer shadow-md"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Buat Postingan Pertama</span>
+              </button>
+            </div>
+          )
         ) : (
           filteredPosts.map((post: ForumPost) => {
             const isLiked = currentUser ? post.likedBy?.includes(currentUser.id) : false;
@@ -541,10 +575,10 @@ export const ForumView: React.FC = () => {
                           : 'bg-cyan-500/20 border-cyan-500/40 text-cyan-300'
                       }`}
                     >
-                      {post.category === 'jasa' ? '💼 Jasa Pelajar' : post.category}
+                      {post.category === 'jasa' ? '💼 Jasa' : post.category}
                     </span>
 
-                    {(currentUser?.id === post.authorId || currentRole === 'owner') && (
+                    {(currentUser?.id === post.authorId || currentRole === 'owner' || currentRole === 'admin') && (
                       <button
                         onClick={() => deleteForumPost(post.id)}
                         className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
@@ -677,19 +711,6 @@ export const ForumView: React.FC = () => {
                       <span>{commentsCount} Komentar</span>
                     </button>
                   </div>
-
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(
-                        `[Forum RemindTask] ${post.title}\n${post.content.slice(0, 80)}...`
-                      );
-                      showToast('Tautan postingan berhasil disalin!', 'success');
-                    }}
-                    className="p-1.5 text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
-                    title="Bagikan postingan"
-                  >
-                    <Share2 className="w-4 h-4" />
-                  </button>
                 </div>
 
                 {/* 5. Instagram Comments Section */}

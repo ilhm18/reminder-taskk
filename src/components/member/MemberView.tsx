@@ -180,8 +180,8 @@ export const MemberView: React.FC = () => {
         chat_admin: 'chat_admin',
         chat_to_admin: 'chat_admin',
         chatadmin: 'chat_admin',
-        chat_owner: 'chat_owner',
-        chat_to_owner: 'chat_owner',
+        chat_owner: 'chat_admin',
+        chat_to_owner: 'chat_admin',
         setting: 'setting',
         settings: 'setting',
         pengaturan: 'setting',
@@ -329,7 +329,6 @@ export const MemberView: React.FC = () => {
         { id: 'forum', label: 'Forum & Jasa', icon: Globe, iconColor: 'text-pink-400', badge: hasUnreadForum ? 1 : undefined },
         { id: 'anonwall', label: 'Pesan Anonim', icon: MessageSquareDashed, iconColor: 'text-amber-400' },
         { id: 'chat_admin', label: 'Chat & Pesan', icon: MessageSquare, badge: unreadChatsCount > 0 ? unreadChatsCount : undefined, iconColor: 'text-pink-400' },
-        { id: 'chat_owner', label: 'Chat Owner', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
         { id: 'saran', label: 'Kritik & Saran', icon: MessageSquarePlus },
       ],
     },
@@ -1606,14 +1605,9 @@ export const MemberView: React.FC = () => {
           <FeedbackView />
         )}
 
-        {/* TAB 8B: CHAT ADMIN */}
-        {activeTab === 'chat_admin' && (
+        {/* TAB 8B: CHAT & PESAN (Siswa, Admin, Owner) */}
+        {(activeTab === 'chat_admin' || (activeTab as string) === 'chat_owner') && (
           <MemberAdminChatView />
-        )}
-
-        {/* TAB 9: CHAT OWNER */}
-        {activeTab === 'chat_owner' && (
-          <OwnerChatView />
         )}
 
         {/* TAB 10: SETTINGS */}

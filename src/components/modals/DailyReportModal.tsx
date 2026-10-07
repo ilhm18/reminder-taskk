@@ -1,14 +1,16 @@
 import React from 'react';
 import { Award, CheckCircle2, Clock, Copy, Download, FileSpreadsheet, FileText, Printer, Send, ShieldAlert, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { TaskSubmission } from '../../types';
 import { formatIndonesianDate, getTaskDeadlineStatus, sendBrowserPushNotification } from '../../utils/notification';
 
 interface DailyReportModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onSelectTask?: (taskId: string, submission?: TaskSubmission) => void;
 }
 
-export const DailyReportModal: React.FC<DailyReportModalProps> = ({ isOpen, onClose }) => {
+export const DailyReportModal: React.FC<DailyReportModalProps> = ({ isOpen, onClose, onSelectTask }) => {
   const { currentClass, tasks, submissions, showToast, sendCustomNotification } = useApp();
 
   if (!isOpen) return null;
@@ -172,7 +174,19 @@ Tetap semangat dan selesaikan tugas tepat waktu! 💪`;
                   <div key={t.id} className="p-3.5 flex items-center justify-between gap-3 text-xs">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="font-bold text-white truncate">{t.title}</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onClose();
+                            if (onSelectTask) {
+                              onSelectTask(t.id, sub);
+                            }
+                          }}
+                          className="font-bold text-white hover:text-pink-300 hover:underline text-left cursor-pointer transition-colors truncate"
+                          title="Klik untuk membuka & meninjau tugas ini"
+                        >
+                          {t.title}
+                        </button>
                         <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${status.badgeClass}`}>
                           {status.label}
                         </span>
@@ -226,7 +240,20 @@ Tetap semangat dan selesaikan tugas tepat waktu! 💪`;
                         <div className="min-w-0">
                           <span className="text-white font-bold block truncate">{s.memberName}</span>
                           <span className="text-[11px] text-pink-300 block truncate mt-0.5">
-                            menyelesaikan tugas <span className="underline font-semibold">{taskObj?.title || 'Tugas Kelas'}</span>
+                            menyelesaikan tugas{' '}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onClose();
+                                if (onSelectTask) {
+                                  onSelectTask(s.taskId, s);
+                                }
+                              }}
+                              className="underline font-semibold hover:text-white transition-colors cursor-pointer"
+                              title="Klik untuk membuka & meninjau tugas ini"
+                            >
+                              {taskObj?.title || 'Tugas Kelas'}
+                            </button>
                           </span>
                         </div>
                       </div>

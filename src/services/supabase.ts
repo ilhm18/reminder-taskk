@@ -512,8 +512,15 @@ CREATE TABLE IF NOT EXISTS public.forum_posts (
   likes INT DEFAULT 0,
   liked_by JSONB DEFAULT '[]'::jsonb,
   comments_count INT DEFAULT 0,
+  comments JSONB DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrasi Keamanan untuk kolom forum_posts jika tabel sudah dibuat sebelumnya
+ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS comments JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS liked_by JSONB DEFAULT '[]'::jsonb;
+ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS likes INT DEFAULT 0;
+ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS comments_count INT DEFAULT 0;
 
 -- ====================================================
 -- AKTIFKAN ROW LEVEL SECURITY (RLS) PENUH DENGAN AKSES PUBLIK

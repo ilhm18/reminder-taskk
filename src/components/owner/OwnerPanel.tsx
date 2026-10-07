@@ -2348,6 +2348,14 @@ export const OwnerPanel: React.FC = () => {
       <DailyReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
+        onSelectTask={(taskId) => {
+          setIsReportModalOpen(false);
+          const taskObj = tasks.find((t) => t.id === taskId);
+          if (taskObj) {
+            setEditingTask(taskObj);
+            setIsTaskModalOpen(true);
+          }
+        }}
       />
 
       {/* Add Admin & Class Modal for Owner */}

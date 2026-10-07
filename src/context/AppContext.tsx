@@ -1084,7 +1084,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             tags: Array.isArray(p.tags) ? p.tags : (typeof p.tags === 'string' ? JSON.parse(p.tags) : []),
             likes: p.likes || 0,
             likedBy: Array.isArray(p.liked_by) ? p.liked_by : (typeof p.liked_by === 'string' ? JSON.parse(p.liked_by) : []),
-            comments: Array.isArray(p.comments) ? p.comments : [],
+            comments: Array.isArray(p.comments) ? p.comments : (typeof p.comments === 'string' ? JSON.parse(p.comments) : []),
             createdAt: p.created_at,
           }));
 
@@ -1991,6 +1991,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
             setAttendanceRecords((prev) => prev.filter((x) => x.id !== oldId));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'forum_posts' },
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const p = payload.new as any;
+            const postObj: ForumPost = {
+              id: p.id,
+              classId: p.class_id || '',
+              className: p.class_name || '',
+              scope: p.scope || 'class',
+              category: p.category || 'diskusi',
+              authorId: p.author_id,
+              authorName: p.author_name,
+              authorRole: p.author_role,
+              authorAvatar: p.author_avatar || undefined,
+              authorClass: p.author_class || undefined,
+              title: p.title,
+              content: p.content,
+              price: p.price || undefined,
+              contact: p.contact || undefined,
+              imageUrl: p.image_url || undefined,
+              imageFileName: p.image_file_name || undefined,
+              tags: Array.isArray(p.tags) ? p.tags : (typeof p.tags === 'string' ? JSON.parse(p.tags) : []),
+              likes: p.likes || 0,
+              likedBy: Array.isArray(p.liked_by) ? p.liked_by : (typeof p.liked_by === 'string' ? JSON.parse(p.liked_by) : []),
+              comments: Array.isArray(p.comments) ? p.comments : (typeof p.comments === 'string' ? JSON.parse(p.comments) : []),
+              createdAt: p.created_at,
+            };
+            setForumPosts((prev) => [postObj, ...prev.filter((x) => x.id !== postObj.id)]);
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as any).id;
+            setForumPosts((prev) => prev.filter((x) => x.id !== oldId));
           }
         }
       )
@@ -4631,6 +4667,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           tags: newPost.tags,
           likes: 0,
           liked_by: [],
+          comments_count: 0,
+          comments: [],
           created_at: newPost.createdAt,
         });
       } catch (err) {
@@ -4705,7 +4743,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (client) {
             client
               .from('forum_posts')
-              .update({ comments_count: updatedComments.length })
+              .update({
+                comments: updatedComments,
+                comments_count: updatedComments.length,
+              })
               .eq('id', postId)
               .then(() => {}, () => {});
           }

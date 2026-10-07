@@ -60,6 +60,14 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [contactFilterRole, setContactFilterRole] = useState<'all' | 'owner' | 'admin' | 'member'>('all');
   const [mobileShowThread, setMobileShowThread] = useState(false);
 
+  // Sync initialTargetUserId when provided or changed
+  useEffect(() => {
+    if (initialTargetUserId) {
+      setSelectedUserId(initialTargetUserId);
+      setMobileShowThread(true);
+    }
+  }, [initialTargetUserId]);
+
   const chatContainerRef = useRef<HTMLDivElement>(null);
 
   // Synchronize all available contacts across the system

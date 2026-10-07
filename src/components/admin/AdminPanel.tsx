@@ -115,24 +115,33 @@ export const AdminPanel: React.FC = () => {
     e.preventDefault();
     e.stopPropagation();
 
-    const currentScroll =
+    const mainEl = document.querySelector('main');
+    const mainScroll = mainEl ? mainEl.scrollTop : 0;
+    const winScroll =
       window.scrollY ||
       document.documentElement.scrollTop ||
-      document.querySelector('main')?.scrollTop ||
+      document.body.scrollTop ||
       0;
-    setPreservedScrollPos(currentScroll);
 
     moderateSubmission(submissionId, 'completed', 'Disetujui langsung oleh Pengajar/Admin.');
     playNotificationSound('success');
     showToast('Tugas siswa berhasil disetujui (Approved)!', 'success');
 
-    requestAnimationFrame(() => {
-      window.scrollTo({ top: currentScroll, behavior: 'instant' });
-      const mainEl = document.querySelector('main');
-      if (mainEl && currentScroll > 0) {
-        mainEl.scrollTop = currentScroll;
+    const doRestore = () => {
+      const el = document.querySelector('main');
+      if (el && mainScroll > 0) {
+        el.scrollTop = mainScroll;
       }
-    });
+      if (winScroll > 0) {
+        window.scrollTo({ top: winScroll, behavior: 'instant' });
+      }
+    };
+
+    doRestore();
+    requestAnimationFrame(doRestore);
+    setTimeout(doRestore, 30);
+    setTimeout(doRestore, 100);
+    setTimeout(doRestore, 250);
   };
 
   type AdminTab =
@@ -225,9 +234,9 @@ export const AdminPanel: React.FC = () => {
         chat_siswa: 'chat_siswa',
         chatsiswa: 'chat_siswa',
         student_chat: 'chat_siswa',
-        chat_owner: 'chat_owner',
-        chat: 'chat_owner',
-        chats: 'chat_owner',
+        chat_owner: 'chat_siswa',
+        chat: 'chat_siswa',
+        chats: 'chat_siswa',
       };
 
       if (raw && ALIAS_MAP[raw]) {
@@ -462,8 +471,7 @@ export const AdminPanel: React.FC = () => {
       title: 'Komunikasi & Moderasi',
       items: [
         { id: 'moderasi', label: 'Pemeriksaan Tugas', icon: FileCheck2, badge: pendingModeration.length || undefined },
-        { id: 'chat_siswa', label: 'Chat Siswa', icon: MessageSquare, badge: unreadMemberChatsCount || undefined, iconColor: 'text-pink-400' },
-        { id: 'chat_owner', label: 'Chat Owner', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
+        { id: 'chat_siswa', label: 'Chat & Pesan', icon: MessageSquare, badge: unreadMemberChatsCount || undefined, iconColor: 'text-pink-400' },
         { id: 'saran', label: 'Kritik & Saran', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
       ],
     },
@@ -2094,14 +2102,9 @@ export const AdminPanel: React.FC = () => {
             <FeedbackView />
           )}
 
-          {/* TAB 9B: CHAT SISWA */}
-          {activeTab === 'chat_siswa' && (
+          {/* TAB 9B: CHAT & PESAN (Siswa, Admin, Owner) */}
+          {(activeTab === 'chat_siswa' || (activeTab as string) === 'chat_owner') && (
             <AdminMemberChatView />
-          )}
-
-          {/* TAB 10: CHAT OWNER */}
-          {activeTab === 'chat_owner' && (
-            <OwnerChatView />
           )}
         </div>
       </main>
@@ -2130,6 +2133,23 @@ export const AdminPanel: React.FC = () => {
       <DailyReportModal
         isOpen={isReportModalOpen}
         onClose={() => setIsReportModalOpen(false)}
+        onSelectTask={(taskId, sub) => {
+          setIsReportModalOpen(false);
+          if (sub) {
+            setModeratingSubmission(sub);
+          } else {
+            const matchSub = submissions.find((s) => s.taskId === taskId && s.classId === currentClass?.id);
+            if (matchSub) {
+              setModeratingSubmission(matchSub);
+            } else {
+              const taskObj = tasks.find((t) => t.id === taskId);
+              if (taskObj) {
+                setEditingTask(taskObj);
+                setIsTaskModalOpen(true);
+              }
+            }
+          }
+        }}
       />
       <ModerationModal
         isOpen={!!moderatingSubmission}

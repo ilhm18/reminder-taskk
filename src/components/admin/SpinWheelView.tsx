@@ -16,6 +16,7 @@ import {
   Plus,
   Layers,
   Award,
+  Clock,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
@@ -116,12 +117,77 @@ export const SpinWheelView: React.FC = () => {
   });
   const [removeWinnerOnSpin, setRemoveWinnerOnSpin] = useState(false);
 
+  // Pending deletion timer states for 5-second delay
+  const [pendingDeleteWinner, setPendingDeleteWinner] = useState<string | null>(null);
+  const [deleteCountdown, setDeleteCountdown] = useState<number>(0);
+  const deleteTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const countdownIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const cancelPendingDelete = () => {
+    if (deleteTimerRef.current) {
+      clearTimeout(deleteTimerRef.current);
+      deleteTimerRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setPendingDeleteWinner(null);
+    setDeleteCountdown(0);
+  };
+
+  const scheduleWinnerRemoval = (winnerName: string) => {
+    cancelPendingDelete();
+    setPendingDeleteWinner(winnerName);
+    setDeleteCountdown(5);
+
+    countdownIntervalRef.current = setInterval(() => {
+      setDeleteCountdown((prev) => {
+        if (prev <= 1) {
+          if (countdownIntervalRef.current) clearInterval(countdownIntervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    deleteTimerRef.current = setTimeout(() => {
+      setNamesText((prev) =>
+        prev
+          .split('\n')
+          .filter((n) => n.trim() !== winnerName)
+          .join('\n')
+      );
+      showToast(`Nama '${winnerName}' telah dihapus dari daftar roda spin.`, 'info');
+      setPendingDeleteWinner(null);
+      setDeleteCountdown(0);
+    }, 5000);
+  };
+
+  const handleImmediateDeleteWinner = (winnerName: string) => {
+    cancelPendingDelete();
+    setNamesText((prev) =>
+      prev
+        .split('\n')
+        .filter((n) => n.trim() !== winnerName)
+        .join('\n')
+    );
+    showToast(`Nama '${winnerName}' langsung dihapus dari daftar.`, 'info');
+  };
+
   // Sync spinHistory to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(historyStorageKey, JSON.stringify(spinHistory));
     } catch {}
   }, [spinHistory, historyStorageKey]);
+
+  // Clean up timers on unmount
+  useEffect(() => {
+    return () => {
+      cancelPendingDelete();
+    };
+  }, []);
 
   // Group Generator States
   const [groupCount, setGroupCount] = useState<number>(5); // e.g. 5 groups for 40 people
@@ -142,6 +208,8 @@ export const SpinWheelView: React.FC = () => {
 
   // SPIN WHEEL LOGIC
   const handleSpin = () => {
+    cancelPendingDelete();
+
     const activeItems = parsedNames.slice(0, 36);
     if (isSpinning || activeItems.length < 2) {
       if (activeItems.length < 2) {
@@ -208,13 +276,9 @@ export const SpinWheelView: React.FC = () => {
         );
       } catch {}
 
+      // Schedule removal with 5-second delay if option enabled
       if (removeWinnerOnSpin) {
-        setNamesText((prev) =>
-          prev
-            .split('\n')
-            .filter((n) => n.trim() !== chosenWinner)
-            .join('\n')
-        );
+        scheduleWinnerRemoval(chosenWinner);
       }
     }, duration);
   };
@@ -426,7 +490,23 @@ export const SpinWheelView: React.FC = () => {
                   }}
                 >
                   <svg viewBox="0 0 100 100" className="w-full h-full rounded-full border-4 border-[#2d2250] shadow-inner">
-                    {parsedNames.length > 0 ? (
+                    {parsedNames.length === 1 ? (
+                      <g>
+                        <circle cx="50" cy="50" r="50" fill={WHEEL_COLORS[0]} />
+                        <text
+                          x="50"
+                          y="50"
+                          fill="#ffffff"
+                          fontSize="4.5"
+                          fontWeight="bold"
+                          textAnchor="middle"
+                          alignmentBaseline="middle"
+                          className="select-none font-sans drop-shadow-sm"
+                        >
+                          {parsedNames[0].length > 12 ? parsedNames[0].substring(0, 11) + '..' : parsedNames[0]}
+                        </text>
+                      </g>
+                    ) : parsedNames.length > 1 ? (
                       parsedNames.slice(0, 36).map((name, idx) => {
                         const count = Math.min(parsedNames.length, 36);
                         const sliceAngle = 360 / count;
@@ -496,8 +576,8 @@ export const SpinWheelView: React.FC = () => {
 
               {/* Winner Announcement Banner */}
               {winner && (
-                <div className="mt-6 w-full p-5 rounded-2xl bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-amber-500/20 border-2 border-pink-500 text-center animate-in zoom-in-95 duration-200 relative overflow-hidden shadow-xl">
-                  <div className="flex items-center justify-center gap-2 mb-1">
+                <div className="mt-6 w-full p-5 rounded-2xl bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-amber-500/20 border-2 border-pink-500 text-center animate-in zoom-in-95 duration-200 relative overflow-hidden shadow-xl space-y-3">
+                  <div className="flex items-center justify-center gap-2">
                     <Trophy className="w-5 h-5 text-amber-400" />
                     <span className="text-xs font-bold uppercase tracking-wider text-pink-300">
                       Siswa Yang Terpilih:
@@ -506,6 +586,48 @@ export const SpinWheelView: React.FC = () => {
                   <h3 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
                     🎉 {winner} 🎉
                   </h3>
+
+                  {/* 5-second countdown timer alert if pending delete */}
+                  {pendingDeleteWinner === winner && deleteCountdown > 0 && (
+                    <div className="p-3 rounded-xl bg-[#120e24]/90 border border-amber-500/50 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-2 max-w-lg mx-auto shadow-md">
+                      <div className="flex items-center gap-2 font-medium">
+                        <Clock className="w-4 h-4 text-amber-400 animate-spin" />
+                        <span>
+                          Menghapus <strong>{winner}</strong> dari roda dalam <span className="font-mono font-bold text-amber-300 text-sm px-1.5 py-0.5 rounded bg-amber-500/20">{deleteCountdown}s</span>...
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={cancelPendingDelete}
+                          className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-white font-bold text-[11px] cursor-pointer transition-colors"
+                        >
+                          Batal
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleImmediateDeleteWinner(winner)}
+                          className="px-2.5 py-1 rounded-lg bg-red-500 hover:bg-red-600 text-white font-bold text-[11px] cursor-pointer transition-colors"
+                        >
+                          Hapus Sekarang
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Manual delete trigger with 5s delay if not already pending */}
+                  {pendingDeleteWinner !== winner && parsedNames.includes(winner) && (
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => scheduleWinnerRemoval(winner)}
+                        className="px-3.5 py-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/40 font-bold text-xs inline-flex items-center gap-1.5 cursor-pointer transition-all active:scale-95"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Hapus Nama Ini (Jeda 5 Detik)</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 

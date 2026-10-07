@@ -342,7 +342,11 @@ export const AttendanceOwnerView: React.FC = () => {
                       </td>
 
                       <td className="p-3.5 text-slate-400 font-mono text-[10px]">
-                        {rec.verificationMethod}
+                        {rec.verificationMethod === 'qr_scan'
+                          ? 'Scan Barcode'
+                          : rec.verificationMethod === 'permission_request'
+                          ? 'Pengajuan Izin'
+                          : 'Manual Guru'}
                       </td>
 
                       <td className="p-3.5 pr-5 text-slate-400 max-w-xs truncate">

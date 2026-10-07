@@ -324,7 +324,15 @@ export const AttendanceMemberView: React.FC = () => {
                   <strong className="text-emerald-400 uppercase font-black">
                     {myRecordForActive.status}
                   </strong>{' '}
-                  • Waktu Check-in:{' '}
+                  • Metode:{' '}
+                  <span className="text-pink-300 font-bold">
+                    {myRecordForActive.verificationMethod === 'qr_scan'
+                      ? 'Scan Barcode / QR Code'
+                      : myRecordForActive.verificationMethod === 'permission_request'
+                      ? 'Pengajuan Izin'
+                      : 'Manual Admin'}
+                  </span>{' '}
+                  • Waktu:{' '}
                   <span className="font-mono text-white font-bold">
                     {new Date(myRecordForActive.checkInTime).toLocaleTimeString('id-ID')} WIB
                   </span>

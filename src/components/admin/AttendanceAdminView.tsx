@@ -841,8 +841,6 @@ export const AttendanceAdminView: React.FC = () => {
                                 </h5>
                                 <div className="flex items-center gap-2 text-[10px] text-slate-400">
                                   <span className="font-mono">{new Date(rec.checkInTime).toLocaleTimeString('id-ID')}</span>
-                                  <span>•</span>
-                                  <span className="text-emerald-400 font-bold uppercase">{rec.verificationMethod}</span>
                                 </div>
                               </div>
                             </div>
