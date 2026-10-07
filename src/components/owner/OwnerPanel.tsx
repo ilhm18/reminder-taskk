@@ -56,6 +56,7 @@ import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { MaintenanceScreen } from '../maintenance/MaintenanceScreen';
+import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 import { formatIndonesianDate, getTaskDeadlineStatus } from '../../utils/notification';
 import { getStoredSupabaseConfig, saveSupabaseConfig, testSupabaseConnection, SUPABASE_SQL_SCHEMA, getSupabaseClient } from '../../services/supabase';
 
@@ -2171,7 +2172,13 @@ export const OwnerPanel: React.FC = () => {
 
           {/* TAB: OWNER PROFILE SETTINGS */}
           {activeTab === 'settings' && (
-            <div className="max-w-xl mx-auto bg-[#141126] border border-[#272144] rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl animate-in fade-in duration-200">
+            <div className="max-w-xl mx-auto space-y-6 animate-in fade-in duration-200">
+              <ProfileAvatarUploader
+                title="Foto Profil Owner Platform"
+                subtitle="Unggah foto profil pengelola pusat platform agar dikenali oleh seluruh admin dan peserta didik"
+              />
+
+              <div className="bg-[#141126] border border-[#272144] rounded-3xl p-6 sm:p-8 space-y-6 shadow-2xl">
               <div>
                 <h3 className="text-lg font-extrabold text-white">Pengaturan Profil Owner</h3>
                 <p className="text-xs text-slate-400 mt-1">
@@ -2221,6 +2228,7 @@ export const OwnerPanel: React.FC = () => {
                   </button>
                 </div>
               </form>
+            </div>
             </div>
           )}
         </div>

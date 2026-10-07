@@ -7,6 +7,7 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 
 export const MemberSettingsView: React.FC = () => {
   const { currentUser, currentClass, showToast, updateMemberProfile } = useApp();
@@ -62,8 +63,17 @@ export const MemberSettingsView: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {/* Left: Quick Profile Card */}
         <div className="bg-[#141126] border border-[#272144] rounded-3xl p-6 text-center space-y-4 h-fit">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-tr from-pink-500 to-purple-600 text-white font-black text-2xl flex items-center justify-center mx-auto shadow-lg shadow-pink-500/30">
-            {(currentUser?.name || 'S').charAt(0).toUpperCase()}
+          <div className="w-20 h-20 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white font-black text-2xl flex items-center justify-center mx-auto shadow-lg shadow-pink-500/30 overflow-hidden relative">
+            {currentUser?.avatar ? (
+              <img
+                src={currentUser.avatar}
+                alt={currentUser.name}
+                className="w-full h-full object-cover"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              (currentUser?.name || 'S').charAt(0).toUpperCase()
+            )}
           </div>
           <div>
             <h3 className="font-bold text-white text-base">{currentUser?.name || 'Siswa Kelas'}</h3>
@@ -90,8 +100,13 @@ export const MemberSettingsView: React.FC = () => {
           </div>
         </div>
 
-        {/* Right: Edit Forms */}
+        {/* Right: Edit Forms & Avatar Uploader */}
         <div className="md:col-span-2 space-y-6">
+          <ProfileAvatarUploader
+            title="Foto Profil Siswa"
+            subtitle="Unggah foto Anda agar dapat dilihat oleh guru, admin, dan teman sekelas"
+          />
+
           <div className="bg-[#141126] border border-[#272144] rounded-3xl p-6 space-y-5 shadow-xl">
             <div className="flex items-center justify-between border-b border-[#231b3d] pb-3">
               <h3 className="font-bold text-white text-base flex items-center gap-2">

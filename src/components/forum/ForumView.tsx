@@ -212,9 +212,12 @@ export const ForumView: React.FC = () => {
           if (currentRole === 'owner') {
             if (selectedOwnerClassId !== 'all' && p.classId !== selectedOwnerClassId) return false;
           } else {
-            if (currentClass?.id && p.classId && p.classId !== currentClass.id) return false;
+            const myClassId = currentClass?.id || currentUser?.classId;
+            const myClassCode = currentClass?.code;
+            if (myClassId && p.classId && p.classId !== myClassId && p.classId !== myClassCode) return false;
           }
         } else {
+          // Forum Global: ALL users accessing RemindTask can see all global posts!
           if (p.scope !== 'global') return false;
         }
 
@@ -553,18 +556,7 @@ export const ForumView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* 2. Image Banner (if available) */}
-                {post.imageUrl && (
-                  <div className="relative max-h-[460px] overflow-hidden bg-black flex items-center justify-center">
-                    <img
-                      src={post.imageUrl}
-                      alt={post.title}
-                      className="w-full object-cover max-h-[460px]"
-                    />
-                  </div>
-                )}
-
-                {/* 3. Post Content & Marketplace Service Details */}
+                {/* 2. Post Content & Marketplace Service Details */}
                 <div className="p-5 space-y-3">
                   {/* Service Price & Contact Box (Khusus Marketplace Jasa) */}
                   {post.category === 'jasa' && (
@@ -629,6 +621,19 @@ export const ForumView: React.FC = () => {
                   <p className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-wrap">
                     {renderFormattedTextWithMentions(post.content)}
                   </p>
+
+                  {/* 3. Image Display (Placed BELOW title & description, neat & compact) */}
+                  {post.imageUrl && (
+                    <div className="pt-2">
+                      <div className="relative rounded-2xl overflow-hidden bg-[#0d0a1b] border border-[#2c2250] p-1 shadow-lg max-w-xl mx-auto flex items-center justify-center">
+                        <img
+                          src={post.imageUrl}
+                          alt={post.title}
+                          className="max-h-72 sm:max-h-80 w-auto max-w-full object-contain rounded-xl"
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Hashtags */}
                   {post.tags && post.tags.length > 0 && (
@@ -707,6 +712,18 @@ export const ForumView: React.FC = () => {
                           >
                             <div className="flex items-center justify-between">
                               <span className="font-bold text-white flex items-center gap-1.5">
+                                {c.authorAvatar ? (
+                                  <img
+                                    src={c.authorAvatar}
+                                    alt={c.authorName}
+                                    className="w-5 h-5 rounded-full object-cover border border-pink-500/50 shrink-0"
+                                    referrerPolicy="no-referrer"
+                                  />
+                                ) : (
+                                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-[9px] text-white font-black shrink-0">
+                                    {c.authorName.charAt(0).toUpperCase()}
+                                  </div>
+                                )}
                                 <span>{c.authorName}</span>
                                 {c.authorRole === 'admin' && (
                                   <span className="text-[9px] text-purple-300 px-1.5 py-0.2 rounded bg-purple-500/20">

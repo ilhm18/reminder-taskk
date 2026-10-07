@@ -80,7 +80,8 @@ interface AppContextType {
   deleteMemberUser: (userId: string) => Promise<void>;
   logout: () => void;
   switchRoleQuick: (role: UserRole) => void;
-  updateMemberProfile: (updates: { name?: string; email?: string }) => void;
+  updateMemberProfile: (updates: { name?: string; email?: string; avatar?: string }) => void;
+  updateUserProfile: (updates: { name?: string; email?: string; avatar?: string; password?: string }) => void;
 
   // Class & Admin Actions
   selectClass: (classId: string) => void;
@@ -925,6 +926,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             classId: p.class_id,
             className: p.class_name,
             status: (p.status || 'active') as 'active' | 'suspended',
+            avatar: p.avatar_url || p.avatar || undefined,
             createdAt: p.created_at || new Date().toISOString(),
           };
         });
@@ -1056,6 +1058,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (err) {
         console.warn('Sync owner_chats table skipped or failed:', err);
+      }
+
+      // Sync forum_posts from Supabase
+      try {
+        const forumRes = await client.from('forum_posts').select('*').order('created_at', { ascending: false });
+        if (Array.isArray(forumRes.data) && forumRes.data.length > 0) {
+          const mappedPosts: ForumPost[] = forumRes.data.map((p: any) => ({
+            id: p.id,
+            classId: p.class_id || '',
+            className: p.class_name || '',
+            scope: p.scope || 'class',
+            category: p.category || 'diskusi',
+            authorId: p.author_id,
+            authorName: p.author_name,
+            authorRole: p.author_role,
+            authorAvatar: p.author_avatar || undefined,
+            authorClass: p.author_class || undefined,
+            title: p.title,
+            content: p.content,
+            price: p.price || undefined,
+            contact: p.contact || undefined,
+            imageUrl: p.image_url || undefined,
+            imageFileName: p.image_file_name || undefined,
+            tags: Array.isArray(p.tags) ? p.tags : (typeof p.tags === 'string' ? JSON.parse(p.tags) : []),
+            likes: p.likes || 0,
+            likedBy: Array.isArray(p.liked_by) ? p.liked_by : (typeof p.liked_by === 'string' ? JSON.parse(p.liked_by) : []),
+            comments: Array.isArray(p.comments) ? p.comments : [],
+            createdAt: p.created_at,
+          }));
+
+          setForumPosts((prev) => {
+            const remoteMap = new Map(mappedPosts.map((x) => [x.id, x]));
+            const localOnly = prev.filter((x) => !remoteMap.has(x.id));
+            const merged = [...mappedPosts, ...localOnly];
+            try { localStorage.setItem(STORAGE_KEYS.FORUM_POSTS, JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      } catch (err) {
+        console.warn('Sync forum_posts skipped or failed:', err);
       }
 
       // Sync system_settings from Supabase
@@ -3410,7 +3452,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  const updateMemberProfile = (updates: { name?: string; email?: string }) => {
+  const updateUserProfile = (updates: { name?: string; email?: string; avatar?: string; password?: string }) => {
     if (!currentUser) return;
     const updatedUser = { ...currentUser, ...updates };
     setCurrentUser(updatedUser);
@@ -3428,7 +3470,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const client = getSupabaseClient();
     if (client) {
-      const profileToUpsert = {
+      const profileToUpsert: any = {
         id: currentUser.id,
         name: updates.name !== undefined ? updates.name : currentUser.name,
         email: updates.email !== undefined ? (updates.email.trim() || null) : (currentUser.email || null),
@@ -3436,7 +3478,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         class_id: currentUser.classId || currentClass?.id || null,
         class_name: currentUser.className || currentClass?.name || null,
         status: currentUser.status || 'active',
+        avatar_url: updates.avatar !== undefined ? (updates.avatar || null) : (currentUser.avatar || null),
       };
+      if (updates.password !== undefined && updates.password.trim()) {
+        profileToUpsert.password = updates.password.trim();
+      }
       client
         .from('profiles')
         .upsert(profileToUpsert, { onConflict: 'id' })
@@ -3446,6 +3492,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           console.warn('[Supabase Profile Upsert Network Error]:', err);
         });
     }
+  };
+
+  const updateMemberProfile = (updates: { name?: string; email?: string; avatar?: string }) => {
+    updateUserProfile(updates);
   };
 
   const createClass = async (name: string, adminName: string): Promise<ClassItem> => {
@@ -5746,6 +5796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         logout,
         switchRoleQuick,
         updateMemberProfile,
+        updateUserProfile,
         selectClass,
         createClass,
         deleteClass,

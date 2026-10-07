@@ -195,7 +195,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
             {calendarCells.map((cell, idx) => {
               const isSelected = cell.dateKey === selectedDateStr;
-              const isToday = cell.dateKey === '2026-10-01'; // Oct 1, 2026
+              const isToday = cell.dateKey === new Date().toISOString().split('T')[0];
               const hasTasks = cell.tasks.length > 0;
 
               return (

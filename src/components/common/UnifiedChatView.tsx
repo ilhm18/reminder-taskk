@@ -71,22 +71,27 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       className?: string;
       classCode?: string;
       avatarColor?: string;
+      avatar?: string;
     }>();
+
+    const ownerUser = users.find((u) => u.role === 'owner');
 
     // 1. Always ensure Platform Owner is available as a contact
     if (currentUser?.role !== 'owner') {
       map.set('owner', {
         id: 'owner',
-        name: 'Owner Platform (Ilham Ramadan)',
+        name: ownerUser?.name ? (ownerUser.name.includes('Owner') ? ownerUser.name : `Owner Platform (${ownerUser.name})`) : 'Owner Platform (Ilham Ramadan)',
         role: 'owner',
         className: 'Pengelola Pusat RemindTask',
         avatarColor: 'from-amber-500 to-orange-600',
+        avatar: ownerUser?.avatar,
       });
     }
 
     // 2. Add class admin from currentClass if member
     if (currentClass?.adminName && currentUser?.role === 'member') {
       const adminId = currentClass.adminId || 'admin-' + currentClass.id;
+      const adminUser = users.find((u) => u.id === adminId || (u.role === 'admin' && u.name === currentClass.adminName));
       map.set(adminId, {
         id: adminId,
         name: currentClass.adminName,
@@ -94,6 +99,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         className: currentClass.name,
         classCode: currentClass.code,
         avatarColor: 'from-purple-600 to-indigo-600',
+        avatar: adminUser?.avatar,
       });
     }
 
@@ -113,6 +119,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             role: 'owner',
             className: 'Pengelola Pusat RemindTask',
             avatarColor: 'from-amber-500 to-orange-600',
+            avatar: u.avatar,
           });
         }
         return; // Do NOT add u.id separately!
@@ -139,6 +146,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         className: u.className || 'Ruang Kelas',
         classCode: (u as any).classCode,
         avatarColor: roleColor,
+        avatar: u.avatar,
       });
     });
 
@@ -198,6 +206,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       otherUserName: string;
       otherUserRole: 'owner' | 'admin' | 'member';
       otherUserClass?: string;
+      otherUserAvatar?: string;
       lastMessage: string;
       lastTimestamp: string;
       unreadCount: number;
@@ -224,6 +233,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       const resolvedRole = contactInfo?.role || otherRole;
       const resolvedName = contactInfo?.name || otherName;
       const resolvedClass = contactInfo?.className || (msg.classId ? `Kelas ${msg.classId}` : undefined);
+      const resolvedAvatar = contactInfo?.avatar;
 
       const existing = threadsMap.get(otherId);
       const isUnread = !isMyMsg && !msg.isRead;
@@ -234,6 +244,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
         otherUserName: resolvedName,
         otherUserRole: resolvedRole,
         otherUserClass: resolvedClass,
+        otherUserAvatar: resolvedAvatar,
         lastMessage: msg.message,
         lastTimestamp: msg.createdAt,
         unreadCount,
@@ -399,7 +410,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
       </div>
 
       {/* Main Chat Layout Container */}
-      <div className="bg-[#141126] border border-[#272144] rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[620px]">
+      <div className="bg-[#141126] border border-[#272144] rounded-3xl overflow-hidden shadow-2xl flex flex-col md:flex-row h-[calc(100vh-200px)] min-h-[480px] max-h-[750px] md:h-[620px]">
         {/* LEFT COLUMN: Inbox & Conversation History */}
         <div
           className={`w-full md:w-80 lg:w-96 border-r border-[#272144] flex flex-col bg-[#100d22] shrink-0 ${
@@ -490,9 +501,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                             : isAdmin
                             ? 'from-purple-600 to-indigo-600'
                             : 'from-pink-500 to-purple-600'
-                        } text-white flex items-center justify-center font-bold text-xs shadow-md`}
+                        } text-white flex items-center justify-center font-bold text-xs shadow-md overflow-hidden`}
                       >
-                        {thread.otherUserName.charAt(0).toUpperCase()}
+                        {thread.otherUserAvatar ? (
+                          <img
+                            src={thread.otherUserAvatar}
+                            alt={thread.otherUserName}
+                            className="w-full h-full object-cover"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          thread.otherUserName.charAt(0).toUpperCase()
+                        )}
                       </div>
                       <div className="absolute -bottom-1 -right-1">
                         {isOwner ? (
@@ -584,9 +604,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   <div
                     className={`w-10 h-10 rounded-2xl bg-gradient-to-tr ${
                       activeContact.avatarColor || 'from-pink-500 to-purple-600'
-                    } text-white flex items-center justify-center font-bold text-sm shadow-md shrink-0`}
+                    } text-white flex items-center justify-center font-bold text-sm shadow-md shrink-0 overflow-hidden`}
                   >
-                    {activeContact.name.charAt(0).toUpperCase()}
+                    {activeContact.avatar ? (
+                      <img
+                        src={activeContact.avatar}
+                        alt={activeContact.name}
+                        className="w-full h-full object-cover"
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      activeContact.name.charAt(0).toUpperCase()
+                    )}
                   </div>
 
                   <div className="min-w-0">
@@ -831,9 +860,18 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                         <div
                           className={`w-10 h-10 rounded-2xl bg-gradient-to-tr ${
                             contact.avatarColor || 'from-pink-500 to-purple-600'
-                          } text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0`}
+                          } text-white flex items-center justify-center font-bold text-xs shadow-md shrink-0 overflow-hidden`}
                         >
-                          {contact.name.charAt(0).toUpperCase()}
+                          {contact.avatar ? (
+                            <img
+                              src={contact.avatar}
+                              alt={contact.name}
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            contact.name.charAt(0).toUpperCase()
+                          )}
                         </div>
                         <div className="min-w-0">
                           <h4 className="font-bold text-xs text-white group-hover:text-pink-300 transition-colors truncate">

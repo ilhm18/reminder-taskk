@@ -80,6 +80,7 @@ import { RealTimeClock } from '../common/RealTimeClock';
 import { formatIndonesianDate, getTaskDeadlineStatus, playNotificationSound } from '../../utils/notification';
 import { downloadEvidenceFile, getFileCategory } from '../../utils/fileEvidence';
 import { getSupabaseClient } from '../../services/supabase';
+import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 
 export const AdminPanel: React.FC = () => {
   const {
@@ -1218,6 +1219,7 @@ export const AdminPanel: React.FC = () => {
                                   e.stopPropagation();
                                   if (window.confirm(`Hapus siswa "${log.studentName}" dari kelas ini?`)) {
                                     await deleteMemberUser(log.studentId);
+                                    showToast(`Siswa "${log.studentName}" berhasil dihapus dari kelas.`, 'info');
                                   }
                                 }}
                                 className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 text-[10px] font-bold border border-red-500/30 transition-colors inline-flex items-center gap-1 cursor-pointer relative z-20"
@@ -1947,6 +1949,69 @@ export const AdminPanel: React.FC = () => {
           {/* TAB 7: PENGATURAN ADMIN (FITUR BARU) */}
           {activeTab === 'pengaturan' && (
             <div className="space-y-6">
+              <ProfileAvatarUploader
+                title="Foto Profil Admin"
+                subtitle="Unggah foto profil pengelola kelas agar dikenali oleh seluruh peserta didik dan Owner"
+              />
+
+              {/* Member Management Box in Settings */}
+              <div className="p-6 rounded-3xl bg-[#141126] border border-[#272144] shadow-xl space-y-4">
+                <div className="flex items-center justify-between border-b border-[#231d3e] pb-3">
+                  <div>
+                    <h3 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
+                      <Users className="w-5 h-5 text-pink-400" />
+                      <span>Kelola &amp; Hapus Anggota Kelas</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Hapus anggota atau siswa yang sudah tidak aktif / salah masuk kelas.
+                    </p>
+                  </div>
+                  <span className="px-3 py-1 rounded-xl bg-pink-500/20 text-pink-300 border border-pink-500/30 text-xs font-mono font-bold">
+                    {currentClassLogs.length} Anggota
+                  </span>
+                </div>
+
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                  {currentClassLogs.length === 0 ? (
+                    <p className="text-xs text-slate-500 italic py-3 text-center">
+                      Belum ada siswa terdaftar di kelas ini.
+                    </p>
+                  ) : (
+                    currentClassLogs.map((m) => (
+                      <div
+                        key={m.studentId}
+                        className="p-3 rounded-2xl bg-[#191436] border border-[#2b214d] flex items-center justify-between gap-3 text-xs"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white flex items-center justify-center font-black text-xs shadow-sm shrink-0">
+                            {m.studentName.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <span className="font-bold text-white block">{m.studentName}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{m.studentEmail}</span>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (window.confirm(`Yakin ingin menghapus siswa "${m.studentName}" dari kelas?`)) {
+                              await deleteMemberUser(m.studentId);
+                              showToast(`Siswa "${m.studentName}" telah dihapus dari kelas.`, 'info');
+                            }
+                          }}
+                          className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-rose-200 border border-rose-500/30 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Hapus siswa ini dari kelas"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Hapus Siswa</span>
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
               <div className="p-6 rounded-3xl bg-[#141126] border border-[#272144]">
                 <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />

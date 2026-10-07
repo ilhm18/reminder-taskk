@@ -488,6 +488,33 @@ CREATE INDEX IF NOT EXISTS idx_attendance_records_session ON public.attendance_r
 CREATE INDEX IF NOT EXISTS idx_attendance_records_student ON public.attendance_records(student_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_class ON public.attendance_records(class_id);
 
+ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS avatar_url TEXT;
+
+-- 18. Buat Tabel Postingan Forum (Class & Global)
+CREATE TABLE IF NOT EXISTS public.forum_posts (
+  id TEXT PRIMARY KEY,
+  class_id TEXT,
+  class_name TEXT,
+  scope TEXT NOT NULL DEFAULT 'class',
+  category TEXT NOT NULL DEFAULT 'diskusi',
+  author_id TEXT NOT NULL,
+  author_name TEXT NOT NULL,
+  author_role TEXT NOT NULL,
+  author_avatar TEXT,
+  author_class TEXT,
+  title TEXT NOT NULL,
+  content TEXT NOT NULL,
+  price TEXT,
+  contact TEXT,
+  image_url TEXT,
+  image_file_name TEXT,
+  tags JSONB DEFAULT '[]'::jsonb,
+  likes INT DEFAULT 0,
+  liked_by JSONB DEFAULT '[]'::jsonb,
+  comments_count INT DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- ====================================================
 -- AKTIFKAN ROW LEVEL SECURITY (RLS) PENUH DENGAN AKSES PUBLIK
 -- ====================================================
@@ -510,6 +537,7 @@ ALTER TABLE public.question_banks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.quiz_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.attendance_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.forum_posts ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Akses publik profil" ON public.profiles;
 DROP POLICY IF EXISTS "Akses publik kelas" ON public.classes;
@@ -530,6 +558,7 @@ DROP POLICY IF EXISTS "Akses publik question banks" ON public.question_banks;
 DROP POLICY IF EXISTS "Akses publik quiz submissions" ON public.quiz_submissions;
 DROP POLICY IF EXISTS "Akses publik attendance sessions" ON public.attendance_sessions;
 DROP POLICY IF EXISTS "Akses publik attendance records" ON public.attendance_records;
+DROP POLICY IF EXISTS "Akses publik forum posts" ON public.forum_posts;
 
 CREATE POLICY "Akses publik profil" ON public.profiles FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik kelas" ON public.classes FOR ALL USING (true) WITH CHECK (true);
@@ -550,6 +579,7 @@ CREATE POLICY "Akses publik question banks" ON public.question_banks FOR ALL USI
 CREATE POLICY "Akses publik quiz submissions" ON public.quiz_submissions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik attendance sessions" ON public.attendance_sessions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik attendance records" ON public.attendance_records FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Akses publik forum posts" ON public.forum_posts FOR ALL USING (true) WITH CHECK (true);
 
 -- ====================================================
 -- AKTIFKAN REALTIME REPLICATION & REPLICA IDENTITY FULL
@@ -574,6 +604,7 @@ ALTER TABLE public.question_banks REPLICA IDENTITY FULL;
 ALTER TABLE public.quiz_submissions REPLICA IDENTITY FULL;
 ALTER TABLE public.attendance_sessions REPLICA IDENTITY FULL;
 ALTER TABLE public.attendance_records REPLICA IDENTITY FULL;
+ALTER TABLE public.forum_posts REPLICA IDENTITY FULL;
 
 DO $$
 BEGIN
@@ -590,6 +621,7 @@ BEGIN
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.owner_chats; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.activity_logs; EXCEPTION WHEN duplicate_object THEN NULL; END;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.forum_posts; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.question_banks; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.quiz_submissions; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.attendance_sessions; EXCEPTION WHEN duplicate_object THEN NULL; END;
