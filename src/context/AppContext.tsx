@@ -10,7 +10,7 @@ import {
   INITIAL_QUIZ_SUBMISSIONS,
 } from '../services/mockData';
 import { getStoredSupabaseConfig, getSupabaseClient } from '../services/supabase';
-import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod } from '../types';
+import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod, ForumPost, ForumCategory, ForumComment } from '../types';
 import {
   formatIndonesianDate,
   getTaskDeadlineStatus,
@@ -66,6 +66,7 @@ interface AppContextType {
   setActiveTab: (tab: string) => void;
   setIsNotificationDrawerOpen: (open: boolean) => void;
   showToast: (text: string, type?: 'info' | 'success' | 'warn') => void;
+  isNotificationReadLocally: (notifId: string, userId?: string) => boolean;
   loginAsOwner: (usernameOrEmail?: string, password?: string, silent?: boolean) => Promise<{ success: boolean; message: string }>;
   loginAsAdmin: (usernameOrEmail: string, password?: string) => Promise<{ success: boolean; message: string }>;
   enterClassByCode: (code: string, memberName?: string, memberEmail?: string) => Promise<{ success: boolean; message: string }>;
@@ -166,9 +167,20 @@ interface AppContextType {
   attendanceSessions: AttendanceSession[];
   attendanceRecords: AttendanceRecord[];
   createAttendanceSession: (data: Omit<AttendanceSession, 'id' | 'createdAt' | 'secretToken'>) => Promise<AttendanceSession>;
+  toggleAttendanceSession: (sessionId: string) => Promise<void>;
   closeAttendanceSession: (sessionId: string) => Promise<void>;
   reopenAttendanceSession: (sessionId: string) => Promise<void>;
   deleteAttendanceSession: (sessionId: string) => Promise<void>;
+  submitAttendance: (data: {
+    sessionId: string;
+    status: AttendanceStatus;
+    latitude?: number;
+    longitude?: number;
+    proofFileName?: string;
+    proofFileUrl?: string;
+    note?: string;
+    manualCode?: string;
+  }) => Promise<{ success: boolean; message: string }>;
   recordAttendance: (
     sessionId: string,
     status: AttendanceStatus,
@@ -180,6 +192,13 @@ interface AppContextType {
   ) => Promise<{ success: boolean; message: string }>;
   updateAttendanceRecord: (recordId: string, status: AttendanceStatus, note?: string) => Promise<void>;
   deleteAttendanceRecord: (recordId: string) => Promise<void>;
+
+  // Forum Kelas & Global
+  forumPosts: ForumPost[];
+  addForumPost: (post: Omit<ForumPost, 'id' | 'createdAt' | 'likes' | 'likedBy' | 'comments'>) => Promise<ForumPost>;
+  likeForumPost: (postId: string) => void;
+  addForumComment: (postId: string, content: string) => Promise<void>;
+  deleteForumPost: (postId: string) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -199,6 +218,7 @@ const STORAGE_KEYS = {
   QUIZ_SUBMISSIONS: 'remindtask_global_v5_quiz_submissions',
   ATTENDANCE_SESSIONS: 'remindtask_global_v5_attendance_sessions',
   ATTENDANCE_RECORDS: 'remindtask_global_v5_attendance_records',
+  FORUM_POSTS: 'remindtask_global_v5_forum_posts',
 };
 
 const isRealEmail = (email?: string): boolean => {
@@ -442,6 +462,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(attendanceRecords));
     } catch {}
   }, [attendanceRecords]);
+
+  const [forumPosts, setForumPosts] = useState<ForumPost[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.FORUM_POSTS);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.FORUM_POSTS, JSON.stringify(forumPosts));
+    } catch {}
+  }, [forumPosts]);
 
   useEffect(() => {
     localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(schedules));
@@ -2075,15 +2110,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }, 4000);
   };
 
+  const isNotificationReadLocally = (notifId: string, userId?: string) => {
+    if (typeof window === 'undefined') return false;
+    const userKey = userId ? `rt_read_notif_${userId}_${notifId}` : `rt_read_notif_guest_${notifId}`;
+    const deviceKey = `rt_read_notif_device_${notifId}`;
+    const legacyKey = `rt_seen_ios_notif_${notifId}`;
+    return (
+      localStorage.getItem(userKey) === 'true' ||
+      localStorage.getItem(deviceKey) === 'true' ||
+      localStorage.getItem(legacyKey) === 'true'
+    );
+  };
+
   const unreadNotifCount = useMemo(() => {
     const activeClassId = currentClass?.id || currentUser?.classId;
+    const activeClassCode = currentClass?.code;
+
     return notifications.filter((n) => {
-      if (n.read) return false;
+      // Check local device/user read state
+      const isReadLocally = n.read || isNotificationReadLocally(n.id, currentUser?.id);
+      if (isReadLocally) return false;
+
       if (currentRole === 'owner') return true;
 
       // Strict direct recipient check
-      if (n.recipientId && currentUser && n.recipientId !== currentUser.id) {
-        return false;
+      if (n.recipientId && currentUser) {
+        if (n.recipientId !== currentUser.id) return false;
+      }
+
+      // STRICT CLASS ISOLATION: If notification belongs to a specific class, it MUST match the user's active class!
+      if (n.classId) {
+        const matchesMyClass =
+          (activeClassId && n.classId === activeClassId) ||
+          (activeClassCode && n.classId === activeClassCode);
+        if (!matchesMyClass) return false;
       }
 
       if (currentRole === 'admin') {
@@ -2091,7 +2151,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return true;
         }
 
-        // Hide older notifications created before this admin account was registered
         const regTimeStr = (currentUser && localStorage.getItem(`rt_admin_reg_time_${currentUser.id}`)) || currentUser?.createdAt;
         if (regTimeStr) {
           const adminCreated = new Date(regTimeStr).getTime();
@@ -2102,14 +2161,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         if (n.targetRole && n.targetRole !== 'admin' && n.targetRole !== 'all') {
-          // If it's a broadcast to their class, show on bell icon
           if (n.type === 'broadcast' && n.classId && activeClassId && n.classId === activeClassId) {
             return true;
           }
           return false;
-        }
-        if (n.classId && activeClassId) {
-          return n.classId === activeClassId;
         }
         return true;
       }
@@ -2117,9 +2172,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (currentRole === 'member') {
         if (n.targetRole && n.targetRole !== 'member' && n.targetRole !== 'all') {
           return false;
-        }
-        if (n.classId && activeClassId) {
-          return n.classId === activeClassId;
         }
         return true;
       }
@@ -2325,8 +2377,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   ): Promise<{ success: boolean; message: string }> => {
     const trimmed = usernameOrEmail.trim().toLowerCase();
     if (!trimmed) {
-      showToast('Harap masukkan username atau email admin.', 'warn');
-      return { success: false, message: 'Harap masukkan username atau email admin.' };
+      showToast('Harap masukkan username admin.', 'warn');
+      return { success: false, message: 'Harap masukkan username admin.' };
     }
 
     // Support owner login with username 'ilham' or 'owner' without requiring email
@@ -2997,79 +3049,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .then(() => {}, (err) => console.warn('Supabase insert class_chats error:', err));
     }
 
-    // Send email notification to recipient
-    const recipientUser = users.find((u) => u.id === recipientId);
-    let recipientEmail = recipientUser?.email;
-
-    if (client) {
-      (async () => {
-        if (!recipientEmail) {
-          try {
-            const { data } = await client
-              .from('profiles')
-              .select('email')
-              .eq('id', recipientId)
-              .maybeSingle();
-            if (data && data.email) {
-              recipientEmail = data.email;
-            }
-          } catch {}
-        }
-        if (recipientEmail && isRealEmail(recipientEmail)) {
-          const config = getStoredSupabaseConfig();
-          fetch('/api/send-email-notification', {
-            method: 'POST',
-            headers: { 
-              'Content-Type': 'application/json',
-              'x-supabase-url': config.url,
-              'x-supabase-key': config.anonKey
-            },
-            body: JSON.stringify({
-              email: recipientEmail,
-              recipientName: recipientName,
-              title: `Pesan Chat Baru dari ${currentUser?.name || 'Seseorang'}`,
-              message: `Halo ${recipientName},\n\nAnda menerima pesan baru dari ${currentUser?.name || 'Pengguna'} di RemindTask:\n\n"${cleanMsg}"\n\nSilakan buka aplikasi RemindTask untuk membaca dan membalas obrolan ini. 💬`,
-              category: 'Obrolan Kelas',
-            }),
-          }).catch(() => {});
-        }
-      })().catch(() => {});
-    } else if (recipientEmail && isRealEmail(recipientEmail)) {
-      const config = getStoredSupabaseConfig();
-      fetch('/api/send-email-notification', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-supabase-url': config.url,
-          'x-supabase-key': config.anonKey
-        },
-        body: JSON.stringify({
-          email: recipientEmail,
-          recipientName: recipientName,
-          title: `Pesan Chat Baru dari ${currentUser?.name || 'Seseorang'}`,
-          message: `Halo ${recipientName},\n\nAnda menerima pesan baru dari ${currentUser?.name || 'Pengguna'} di RemindTask:\n\n"${cleanMsg}"\n\nSilakan buka aplikasi RemindTask untuk membaca dan membalas obrolan ini. 💬`,
-          category: 'Obrolan Kelas',
-        }),
-      }).catch(() => {});
-    }
-
     return newMsg;
   };
 
   const markClassChatsAsRead = (otherUserId: string) => {
+    const isOwnerTarget = otherUserId === 'owner' || otherUserId.startsWith('owner');
+
     setClassChats((prev) =>
-      prev.map((c) =>
-        c.senderId === otherUserId || c.recipientId === otherUserId ? { ...c, isRead: true } : c
-      )
+      prev.map((c) => {
+        const isMatch = isOwnerTarget
+          ? c.senderId === 'owner' || c.senderId.startsWith('owner') || c.recipientId === 'owner' || c.recipientId.startsWith('owner') || c.senderRole === 'owner'
+          : c.senderId === otherUserId || c.recipientId === otherUserId;
+        return isMatch ? { ...c, isRead: true } : c;
+      })
     );
 
     const client = getSupabaseClient();
     if (client && currentUser?.id) {
-      client
-        .from('class_chats')
-        .update({ is_read: true })
-        .or(`sender_id.eq.${otherUserId},recipient_id.eq.${otherUserId}`)
-        .then(() => {}, () => {});
+      if (isOwnerTarget) {
+        client
+          .from('class_chats')
+          .update({ is_read: true })
+          .or(`sender_role.eq.owner,sender_id.eq.owner,sender_id.like.owner%,recipient_id.eq.owner,recipient_id.like.owner%`)
+          .then(() => {}, () => {});
+      } else {
+        client
+          .from('class_chats')
+          .update({ is_read: true })
+          .or(`sender_id.eq.${otherUserId},recipient_id.eq.${otherUserId}`)
+          .then(() => {}, () => {});
+      }
     }
   };
 
@@ -3242,28 +3251,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       `Admin "${data.name}" (@${cleanUsername}) ditambahkan untuk kelas ${newClass.name} (Kode: ${code}).`,
       'admin'
     );
-
-    // Dispatch actual email to ilhamramaaadan18@gmail.com via backend API
-    try {
-      const config = getStoredSupabaseConfig();
-      await fetch('/api/notify-admin-registration', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-supabase-url': config.url,
-          'x-supabase-key': config.anonKey
-        },
-        body: JSON.stringify({
-          name: data.name,
-          username: cleanUsername,
-          email: data.email || cleanEmail,
-          className: newClass.name,
-          code,
-        }),
-      });
-    } catch (errEmail) {
-      console.warn('Failed to dispatch admin registration email:', errEmail);
-    }
 
     showToast(`Admin ${data.name} (@${cleanUsername}) berhasil dibuat dengan kode kelas: ${code}`, 'success');
     playNotificationSound('success');
@@ -3640,73 +3627,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     sendCustomNotification(notifTitle, notifMsg, 'task_assigned', newTask.classId, newTask.id, 'member', undefined);
 
-    // Dispatch email notification strictly to member users of this specific class code from Supabase database
-    try {
-      const emailSet = new Set<string>();
-      const targetClass = newTask.classId;
-      const config = getStoredSupabaseConfig();
-
-      if (client) {
-        Promise.all([
-          client.from('profiles').select('email, class_id, role').eq('class_id', targetClass).eq('role', 'member'),
-          client.from('class_access_logs').select('student_email').eq('class_id', targetClass)
-        ]).then(([profilesRes, logsRes]) => {
-          if (Array.isArray(profilesRes.data)) {
-            profilesRes.data.forEach((p) => {
-              if (p.email && p.email.includes('@') && !p.email.endsWith('@siswa.com') && !p.email.endsWith('@remindtask.local') && !p.email.endsWith('@siswa.remindtask.com')) {
-                emailSet.add(p.email.trim());
-              }
-            });
-          }
-          if (Array.isArray(logsRes.data)) {
-            logsRes.data.forEach((l) => {
-              if (l.student_email && l.student_email.includes('@') && !l.student_email.endsWith('@siswa.com') && !l.student_email.endsWith('@remindtask.local') && !l.student_email.endsWith('@siswa.remindtask.com')) {
-                emailSet.add(l.student_email.trim());
-              }
-            });
-          }
-          
-          const uniqueEmails = Array.from(emailSet);
-          if (uniqueEmails.length > 0) {
-            fetch('/api/send-broadcast-emails', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'x-supabase-url': config.url,
-                'x-supabase-key': config.anonKey
-              },
-              body: JSON.stringify({
-                title: `📌 Tugas Baru: ${newTask.title}`,
-                message: `Halo Siswa/Anggota Kelas!\n\nAdmin ${adminName} telah menambahkan tugas baru di kelas ${className}:\n\n📌 Judul Tugas: ${newTask.title}\n📂 Kategori: ${newTask.category}\n⏰ Batas Pengumpulan: ${formattedDueDate}\n\n📝 Deskripsi & Petunjuk:\n${newTask.description || '-'}\n\nSilakan buka aplikasi RemindTask untuk melihat detail dan mengumpulkan tugas tepat waktu! 🚀`,
-                emails: uniqueEmails,
-                category: 'Tugas Baru',
-                classId: targetClass,
-              }),
-            }).catch(() => {});
-          }
-        });
-      } else {
-        users.forEach((u) => {
-          if (u.classId === targetClass && u.role === 'member' && u.email && u.email.includes('@') && !u.email.endsWith('@siswa.com') && !u.email.endsWith('@remindtask.local') && !u.email.endsWith('@siswa.remindtask.com')) {
-            emailSet.add(u.email.trim());
-          }
-        });
-        const uniqueEmails = Array.from(emailSet);
-        if (uniqueEmails.length > 0) {
-          fetch('/api/send-broadcast-emails', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              title: `📌 Tugas Baru: ${newTask.title}`,
-              message: `Halo Siswa/Anggota Kelas!\n\nAdmin ${adminName} telah menambahkan tugas baru di kelas ${className}:\n\n📌 Judul Tugas: ${newTask.title}\n📂 Kategori: ${newTask.category}\n⏰ Batas Pengumpulan: ${formattedDueDate}\n\n📝 Deskripsi & Petunjuk:\n${newTask.description || '-'}\n\nSilakan buka aplikasi RemindTask untuk melihat detail dan mengumpulkan tugas tepat waktu! 🚀`,
-              emails: uniqueEmails,
-              category: 'Tugas Baru',
-            }),
-          }).catch(() => {});
-        }
-      }
-    } catch {}
-
     showToast(`Tugas "${newTask.title}" berhasil dipublikasikan & disiarkan secara realtime!`, 'success');
     return newTask;
   };
@@ -3833,73 +3753,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       undefined,
       'member'
     );
-
-    // Dispatch email notification strictly to member users of this specific class code from Supabase database
-    try {
-      const emailSet = new Set<string>();
-      const targetClass = newMaterial.classId;
-      const config = getStoredSupabaseConfig();
-
-      if (client) {
-        Promise.all([
-          client.from('profiles').select('email, class_id, role').eq('class_id', targetClass).eq('role', 'member'),
-          client.from('class_access_logs').select('student_email').eq('class_id', targetClass)
-        ]).then(([profilesRes, logsRes]) => {
-          if (Array.isArray(profilesRes.data)) {
-            profilesRes.data.forEach((p) => {
-              if (p.email && p.email.includes('@') && !p.email.endsWith('@siswa.com') && !p.email.endsWith('@remindtask.local') && !p.email.endsWith('@siswa.remindtask.com')) {
-                emailSet.add(p.email.trim());
-              }
-            });
-          }
-          if (Array.isArray(logsRes.data)) {
-            logsRes.data.forEach((l) => {
-              if (l.student_email && l.student_email.includes('@') && !l.student_email.endsWith('@siswa.com') && !l.student_email.endsWith('@remindtask.local') && !l.student_email.endsWith('@siswa.remindtask.com')) {
-                emailSet.add(l.student_email.trim());
-              }
-            });
-          }
-          
-          const uniqueEmails = Array.from(emailSet);
-          if (uniqueEmails.length > 0) {
-            fetch('/api/send-broadcast-emails', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'x-supabase-url': config.url,
-                'x-supabase-key': config.anonKey
-              },
-              body: JSON.stringify({
-                title: `📚 Materi Baru: ${newMaterial.title}`,
-                message: `Halo Siswa/Anggota Kelas!\n\nAdmin ${adminName} telah membagikan materi pembelajaran baru di kelas ${className}:\n\n📚 Judul Materi: ${newMaterial.title}\n📂 Kategori: ${newMaterial.category}\n📝 Deskripsi: ${newMaterial.description || '-'}\n\nSilakan buka aplikasi RemindTask untuk mengunduh atau membaca materi pembelajaran ini! 📖`,
-                emails: uniqueEmails,
-                category: 'Materi Baru',
-                classId: targetClass,
-              }),
-            }).catch(() => {});
-          }
-        });
-      } else {
-        users.forEach((u) => {
-          if (u.classId === targetClass && u.role === 'member' && u.email && u.email.includes('@') && !u.email.endsWith('@siswa.com') && !u.email.endsWith('@remindtask.local') && !u.email.endsWith('@siswa.remindtask.com')) {
-            emailSet.add(u.email.trim());
-          }
-        });
-        const uniqueEmails = Array.from(emailSet);
-        if (uniqueEmails.length > 0) {
-          fetch('/api/send-broadcast-emails', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              title: `📚 Materi Baru: ${newMaterial.title}`,
-              message: `Halo Siswa/Anggota Kelas!\n\nAdmin ${adminName} telah membagikan materi pembelajaran baru di kelas ${className}:\n\n📚 Judul Materi: ${newMaterial.title}\n📂 Kategori: ${newMaterial.category}\n📝 Deskripsi: ${newMaterial.description || '-'}\n\nSilakan buka aplikasi RemindTask untuk mengunduh atau membaca materi pembelajaran ini! 📖`,
-              emails: uniqueEmails,
-              category: 'Materi Baru',
-            }),
-          }).catch(() => {});
-        }
-      }
-    } catch {}
 
     playNotificationSound('success');
     showToast(`Materi "${newMaterial.title}" berhasil diunggah!`, 'success');
@@ -4582,6 +4435,254 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Data presensi siswa dihapus.', 'info');
   };
 
+  const toggleAttendanceSession = async (sessionId: string) => {
+    const session = attendanceSessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    if (session.isActive) {
+      await closeAttendanceSession(sessionId);
+    } else {
+      await reopenAttendanceSession(sessionId);
+    }
+  };
+
+  const submitAttendance = async (data: {
+    sessionId: string;
+    status: AttendanceStatus;
+    latitude?: number;
+    longitude?: number;
+    proofFileName?: string;
+    proofFileUrl?: string;
+    note?: string;
+    manualCode?: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    const session = attendanceSessions.find((s) => s.id === data.sessionId);
+    if (!session) {
+      return { success: false, message: 'Sesi presensi tidak ditemukan.' };
+    }
+    if (!session.isActive) {
+      return { success: false, message: 'Sesi presensi ini telah ditutup.' };
+    }
+
+    const studentId = currentUser?.id || 'guest-' + Date.now();
+    const studentName = currentUser?.name || 'Siswa';
+    const studentEmail = currentUser?.email;
+
+    // Check existing
+    const existing = attendanceRecords.find(
+      (r) => r.sessionId === data.sessionId && r.studentId === studentId
+    );
+    if (existing) {
+      return {
+        success: false,
+        message: `Anda sudah tercatat presensi sebelumnya (${existing.status.toUpperCase()}).`,
+      };
+    }
+
+    // Geofencing verification
+    let distMeters: number | undefined = undefined;
+    let withinRad: boolean | undefined = undefined;
+    if (session.latitude !== undefined && session.longitude !== undefined && data.latitude !== undefined && data.longitude !== undefined) {
+      distMeters = calculateDistanceMeters(session.latitude, session.longitude, data.latitude, data.longitude);
+      const maxRadius = session.radiusMeters || 100;
+      withinRad = distMeters <= maxRadius;
+      if (data.status === 'hadir' && !withinRad) {
+        return {
+          success: false,
+          message: `Lokasi Anda berada di luar radius kelas (${distMeters} meter, maksimal ${maxRadius} meter).`,
+        };
+      }
+    }
+
+    const newRecord: AttendanceRecord = {
+      id: 'arec-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      sessionId: data.sessionId,
+      classId: session.classId,
+      studentId,
+      studentName,
+      studentEmail,
+      status: data.status,
+      checkInTime: new Date().toISOString(),
+      timestamp: new Date().toISOString(),
+      deviceInfo: `${navigator.platform || 'Device'} • ${window.screen.width}x${window.screen.height}`,
+      verificationMethod: data.manualCode ? 'rolling_token' : data.proofFileUrl ? 'permission_request' : 'qr_scan',
+      note: data.note,
+      proofFileName: data.proofFileName,
+      proofFileUrl: data.proofFileUrl,
+      distanceMeters: distMeters,
+      isWithinRadius: withinRad,
+      locationVerified: withinRad,
+      createdAt: new Date().toISOString(),
+    };
+
+    setAttendanceRecords((prev) => [newRecord, ...prev.filter((r) => !(r.sessionId === data.sessionId && r.studentId === studentId))]);
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('attendance_records').upsert({
+          id: newRecord.id,
+          session_id: newRecord.sessionId,
+          class_id: newRecord.classId,
+          student_id: newRecord.studentId,
+          student_name: newRecord.studentName,
+          student_email: newRecord.studentEmail || null,
+          status: newRecord.status,
+          check_in_time: newRecord.checkInTime,
+          device_info: newRecord.deviceInfo || null,
+          verification_method: newRecord.verificationMethod,
+          note: newRecord.note || null,
+          location_verified: newRecord.locationVerified,
+          created_at: newRecord.createdAt,
+        });
+      } catch (err) {
+        console.warn('Supabase attendance record save error:', err);
+      }
+    }
+
+    playNotificationSound('chime');
+    return { success: true, message: `Presensi ${data.status.toUpperCase()} berhasil dikirim!` };
+  };
+
+  // Forum Actions
+  const addForumPost = async (
+    data: Omit<ForumPost, 'id' | 'createdAt' | 'likes' | 'likedBy' | 'comments'>
+  ): Promise<ForumPost> => {
+    const newPost: ForumPost = {
+      ...data,
+      id: 'post-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      likes: 0,
+      likedBy: [],
+      comments: [],
+      createdAt: new Date().toISOString(),
+    };
+
+    setForumPosts((prev) => [newPost, ...prev]);
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('forum_posts').insert({
+          id: newPost.id,
+          class_id: newPost.classId,
+          class_name: newPost.className || '',
+          scope: newPost.scope,
+          category: newPost.category,
+          author_id: newPost.authorId,
+          author_name: newPost.authorName,
+          author_role: newPost.authorRole,
+          author_avatar: newPost.authorAvatar || null,
+          author_class: newPost.authorClass || null,
+          title: newPost.title,
+          content: newPost.content,
+          price: newPost.price || null,
+          contact: newPost.contact || null,
+          image_url: newPost.imageUrl || null,
+          image_file_name: newPost.imageFileName || null,
+          tags: newPost.tags,
+          likes: 0,
+          liked_by: [],
+          created_at: newPost.createdAt,
+        });
+      } catch (err) {
+        console.warn('Supabase forum_posts insert error:', err);
+      }
+    }
+
+    addActivityLog(
+      currentUser?.name || 'User',
+      currentRole,
+      'Postingan Forum Baru',
+      `Membuat postingan di forum [${newPost.scope === 'global' ? 'Global' : 'Kelas'}]: "${newPost.title}"`,
+      'class'
+    );
+
+    playNotificationSound('success');
+    showToast('Postingan kamu berhasil dibagikan di Forum!', 'success');
+    return newPost;
+  };
+
+  const likeForumPost = (postId: string) => {
+    if (!currentUser) return;
+    const userId = currentUser.id;
+
+    setForumPosts((prev) =>
+      prev.map((post) => {
+        if (post.id === postId) {
+          const isLiked = post.likedBy?.includes(userId);
+          const newLikedBy = isLiked
+            ? (post.likedBy || []).filter((id) => id !== userId)
+            : [...(post.likedBy || []), userId];
+          const newLikes = newLikedBy.length;
+          const updated = { ...post, likedBy: newLikedBy, likes: newLikes };
+
+          const client = getSupabaseClient();
+          if (client) {
+            client
+              .from('forum_posts')
+              .update({ likes: newLikes, liked_by: newLikedBy })
+              .eq('id', postId)
+              .then(() => {}, () => {});
+          }
+
+          return updated;
+        }
+        return post;
+      })
+    );
+  };
+
+  const addForumComment = async (postId: string, content: string) => {
+    const text = content.trim();
+    if (!text || !currentUser) return;
+
+    const newComment: ForumComment = {
+      id: 'fcom-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      authorId: currentUser.id,
+      authorName: currentUser.name,
+      authorRole: currentRole,
+      authorAvatar: currentUser.avatar,
+      content: text,
+      createdAt: new Date().toISOString(),
+    };
+
+    setForumPosts((prev) =>
+      prev.map((post) => {
+        if (post.id === postId) {
+          const updatedComments = [...(post.comments || []), newComment];
+          const updated = { ...post, comments: updatedComments };
+
+          const client = getSupabaseClient();
+          if (client) {
+            client
+              .from('forum_posts')
+              .update({ comments_count: updatedComments.length })
+              .eq('id', postId)
+              .then(() => {}, () => {});
+          }
+
+          return updated;
+        }
+        return post;
+      })
+    );
+
+    playNotificationSound('beep');
+    showToast('Komentar berhasil dikirim!', 'success');
+  };
+
+  const deleteForumPost = async (postId: string) => {
+    setForumPosts((prev) => prev.filter((p) => p.id !== postId));
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('forum_posts').delete().eq('id', postId);
+      } catch (err) {}
+    }
+
+    showToast('Postingan forum berhasil dihapus.', 'info');
+  };
+
   // Anonymous Wall Actions
   const addAnonymousMessage = async (
     data: Omit<AnonymousMessage, 'id' | 'createdAt' | 'likes' | 'likedByMe'>
@@ -5055,6 +5156,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const markNotificationAsRead = (id: string) => {
     setLiveBannerNotification((curr) => (curr?.id === id ? null : curr));
+    const uId = currentUser?.id || 'guest';
+    try {
+      localStorage.setItem(`rt_read_notif_${uId}_${id}`, 'true');
+      localStorage.setItem(`rt_read_notif_device_${id}`, 'true');
+      localStorage.setItem(`rt_seen_ios_notif_${id}`, 'true');
+    } catch {}
+
     setNotifications((prev) => {
       const updated = prev.map((n) => (n.id === id ? { ...n, read: true } : n));
       try {
@@ -5062,63 +5170,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch {}
       return updated;
     });
-    try {
-      localStorage.setItem(`rt_seen_ios_notif_${id}`, 'true');
-      const seenKey = `rt_seen_ios_notif_${id}_${currentUser?.id || 'guest'}`;
-      localStorage.setItem(seenKey, 'true');
-    } catch {}
-    const client = getSupabaseClient();
-    if (client) {
-      client.from('notifications').update({ read: true }).eq('id', id).then(() => {}, () => {});
+
+    // Only update Supabase if it's a direct message specifically for currentUser
+    const targetNotif = notifications.find((n) => n.id === id);
+    if (targetNotif && targetNotif.recipientId && currentUser && targetNotif.recipientId === currentUser.id) {
+      const client = getSupabaseClient();
+      if (client) {
+        client.from('notifications').update({ read: true }).eq('id', id).then(() => {}, () => {});
+      }
     }
   };
 
   const markAllNotificationsAsRead = () => {
     setLiveBannerNotification(null);
     const activeClassId = currentClass?.id || currentUser?.classId;
+    const activeClassCode = currentClass?.code;
+    const uId = currentUser?.id || 'guest';
     const readIds: string[] = [];
-
-    // Pre-check if any unread notifications exist to prevent spam
-    const hasUnread = notifications.some((n) => {
-      if (n.read) return false;
-      if (currentRole === 'owner') return true;
-      if (!n.classId || (activeClassId && n.classId === activeClassId)) {
-        if (n.recipientId && currentUser && n.recipientId === currentUser.id) return true;
-        if (!n.recipientId) {
-          if (currentRole === 'admin') return n.targetRole === 'admin' || n.targetRole === 'all' || !n.targetRole || n.type === 'broadcast';
-          if (currentRole === 'member') return n.targetRole === 'member' || n.targetRole === 'all' || !n.targetRole;
-        }
-      }
-      return false;
-    });
-
-    if (!hasUnread) {
-      showToast('Semua notifikasi sudah dibaca.', 'info');
-      return;
-    }
 
     setNotifications((prev) => {
       const updated = prev.map((n) => {
         let isForMe = false;
         if (currentRole === 'owner') {
           isForMe = true;
-        } else if (!n.classId || (activeClassId && n.classId === activeClassId)) {
-          if (n.recipientId && currentUser && n.recipientId === currentUser.id) {
-            isForMe = true;
-          } else if (!n.recipientId) {
-            if (currentRole === 'admin') {
-              isForMe = n.targetRole === 'admin' || n.targetRole === 'all' || !n.targetRole || n.type === 'broadcast';
-            } else if (currentRole === 'member') {
-              isForMe = n.targetRole === 'member' || n.targetRole === 'all' || !n.targetRole;
+        } else {
+          const matchesMyClass =
+            !n.classId ||
+            (activeClassId && n.classId === activeClassId) ||
+            (activeClassCode && n.classId === activeClassCode);
+          if (matchesMyClass) {
+            if (n.recipientId && currentUser && n.recipientId === currentUser.id) {
+              isForMe = true;
+            } else if (!n.recipientId) {
+              if (currentRole === 'admin') {
+                isForMe = n.targetRole === 'admin' || n.targetRole === 'all' || !n.targetRole || n.type === 'broadcast';
+              } else if (currentRole === 'member') {
+                isForMe = n.targetRole === 'member' || n.targetRole === 'all' || !n.targetRole;
+              }
             }
           }
         }
-        if (isForMe && !n.read) {
+
+        if (isForMe) {
           readIds.push(n.id);
           return { ...n, read: true };
         }
         return n;
       });
+
       try {
         localStorage.setItem(STORAGE_KEYS.NOTIFS, JSON.stringify(updated));
       } catch {}
@@ -5127,23 +5226,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       readIds.forEach((id) => {
+        localStorage.setItem(`rt_read_notif_${uId}_${id}`, 'true');
+        localStorage.setItem(`rt_read_notif_device_${id}`, 'true');
         localStorage.setItem(`rt_seen_ios_notif_${id}`, 'true');
-        const seenKey = `rt_seen_ios_notif_${id}_${currentUser?.id || 'guest'}`;
-        localStorage.setItem(seenKey, 'true');
       });
     } catch {}
 
-    const client = getSupabaseClient();
-    if (client && readIds.length > 0) {
-      client
-        .from('notifications')
-        .update({ read: true })
-        .in('id', readIds)
-        .then(() => {}, () => {});
-    }
-
     playNotificationSound('beep');
-    showToast('Semua notifikasi berhasil ditandai telah dibaca.', 'success');
+    showToast('Notifikasi berhasil ditandai telah dibaca di perangkat ini.', 'success');
   };
 
   const deleteNotification = (id: string) => {
@@ -5273,98 +5363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetRole
     );
 
-    // Also dispatch broadcast email to registered emails from Supabase profiles database and active users
-    try {
-      const client = getSupabaseClient();
-      const emailSet = new Set<string>();
-
-      // If targeting class members, query Supabase database exclusively; otherwise collect appropriately
-      if (params.target === 'class_members' && targetClassId) {
-        if (client) {
-          const { data: profilesData } = await client
-            .from('profiles')
-            .select('email, role, class_id')
-            .eq('class_id', targetClassId)
-            .eq('role', 'member');
-          if (Array.isArray(profilesData)) {
-            profilesData.forEach((p) => {
-              if (p.email && p.email.includes('@') && !p.email.endsWith('@siswa.com') && !p.email.endsWith('@remindtask.com')) {
-                emailSet.add(p.email.trim());
-              }
-            });
-          }
-        } else {
-          users.forEach((u) => {
-            if (u.classId === targetClassId && u.role === 'member' && u.email && u.email.includes('@') && !u.email.endsWith('@siswa.com') && !u.email.endsWith('@remindtask.com')) {
-              emailSet.add(u.email.trim());
-            }
-          });
-        }
-      } else {
-        // Collect from local users state first for other targets
-        users.forEach((u) => {
-          if (u.email && u.email.includes('@') && !u.email.endsWith('@siswa.com') && !u.email.endsWith('@remindtask.com')) {
-            if (params.target === 'admins_only') {
-              if (u.role === 'admin') emailSet.add(u.email.trim());
-            } else {
-              emailSet.add(u.email.trim());
-            }
-          }
-        });
-
-        // Also collect from Supabase profiles
-        if (client) {
-          let query = client.from('profiles').select('email, role, class_id');
-          if (params.target === 'admins_only') {
-            query = query.eq('role', 'admin');
-          }
-          const { data: profilesData } = await query;
-          if (Array.isArray(profilesData)) {
-            profilesData.forEach((p) => {
-              if (p.email && p.email.includes('@') && !p.email.endsWith('@siswa.com') && !p.email.endsWith('@remindtask.com')) {
-                emailSet.add(p.email.trim());
-              }
-            });
-          }
-        }
-      }
-
-      // Only include current sender's email if broadcasting to all or admins_only, not for class members
-      if (params.target !== 'class_members') {
-        if (currentUser?.email && currentUser.email.includes('@') && !currentUser.email.endsWith('@siswa.com')) {
-          emailSet.add(currentUser.email.trim());
-        }
-      }
-
-      // If broadcasting to all, also notify Owner
-      if (params.target === 'all') {
-        emailSet.add('ilhamramaaadan18@gmail.com');
-      }
-
-      const uniqueEmails = Array.from(emailSet);
-      if (uniqueEmails.length > 0) {
-        const config = getStoredSupabaseConfig();
-        fetch('/api/send-broadcast-emails', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-supabase-url': config.url,
-            'x-supabase-key': config.anonKey
-          },
-          body: JSON.stringify({
-            title: params.title.trim(),
-            message: params.message.trim(),
-            emails: uniqueEmails,
-            category: 'Broadcast Siaran',
-            classId: params.target === 'class_members' ? targetClassId : undefined,
-          }),
-        }).catch((err) => console.warn('Broadcast fetch error:', err));
-      }
-    } catch (err) {
-      console.warn('Failed to dispatch broadcast emails:', err);
-    }
-
-    showToast('Broadcast pengumuman & notifikasi email berhasil disiarkan!', 'success');
+    showToast('Broadcast pengumuman berhasil disiarkan!', 'success');
   };
 
   // Owner management
@@ -5410,24 +5409,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setOwnerChats((prev) => [...prev, newChat]);
 
-    // If sent by user (not owner), notify owner's email instantly!
-    if (!isOwnerAction) {
-      const config = getStoredSupabaseConfig();
-      fetch('/api/notify-owner-action', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'x-supabase-url': config.url,
-          'x-supabase-key': config.anonKey
-        },
-        body: JSON.stringify({
-          actionType: 'owner_chat',
-          title: `Pesan Chat Baru dari ${sName} (${sRole})`,
-          message: `Pengguna bernama ${sName} (${sRole}) mengirim pesan ke Owner di platform:\n\n"${messageText.trim()}"\n\nKelas: ${activeClassName || '-'}`,
-        }),
-      }).catch(() => {});
-    }
-
     // Send realtime browser notification
     if (isOwnerAction) {
       sendCustomNotification(
@@ -5466,63 +5447,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         });
       } catch (err) {
         console.warn('Failed to insert owner chat to Supabase:', err);
-      }
-    }
-
-    // If sent by Owner, send email notification to the student/admin recipient
-    if (isOwnerAction) {
-      const recipientUser = users.find((u) => u.id === sId);
-      let targetEmail = recipientUser?.email;
-      if (client) {
-        (async () => {
-          if (!targetEmail) {
-            try {
-              const { data } = await client
-                .from('profiles')
-                .select('email')
-                .eq('id', sId)
-                .maybeSingle();
-              if (data && data.email) {
-                targetEmail = data.email;
-              }
-            } catch {}
-          }
-          if (targetEmail && isRealEmail(targetEmail)) {
-            const config = getStoredSupabaseConfig();
-            fetch('/api/send-email-notification', {
-              method: 'POST',
-              headers: { 
-                'Content-Type': 'application/json',
-                'x-supabase-url': config.url,
-                'x-supabase-key': config.anonKey
-              },
-              body: JSON.stringify({
-                email: targetEmail,
-                recipientName: sName,
-                title: `Balasan Chat Baru dari Owner`,
-                message: `Halo ${sName},\n\nOwner platform RemindTask baru saja membalas pesan chat Anda:\n\n"${messageText.trim()}"\n\nSilakan buka menu Konsultasi Owner di aplikasi RemindTask untuk membaca pesan selengkapnya. 👑`,
-                category: 'Pesan Owner',
-              }),
-            }).catch(() => {});
-          }
-        })().catch(() => {});
-      } else if (targetEmail && isRealEmail(targetEmail)) {
-        const config = getStoredSupabaseConfig();
-        fetch('/api/send-email-notification', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-supabase-url': config.url,
-            'x-supabase-key': config.anonKey
-          },
-          body: JSON.stringify({
-            email: targetEmail,
-            recipientName: sName,
-            title: `Balasan Chat Baru dari Owner`,
-            message: `Halo ${sName},\n\nOwner platform RemindTask baru saja membalas pesan chat Anda:\n\n"${messageText.trim()}"\n\nSilakan buka menu Konsultasi Owner di aplikasi RemindTask untuk membaca pesan selengkapnya. 👑`,
-            category: 'Pesan Owner',
-          }),
-        }).catch(() => {});
       }
     }
   };
@@ -5807,6 +5731,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setActiveTab,
         setIsNotificationDrawerOpen,
         showToast,
+        isNotificationReadLocally,
         loginAsOwner,
         loginAsAdmin,
         enterClassByCode,
@@ -5873,12 +5798,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         attendanceSessions,
         attendanceRecords,
         createAttendanceSession,
+        toggleAttendanceSession,
         closeAttendanceSession,
         reopenAttendanceSession,
         deleteAttendanceSession,
+        submitAttendance,
         recordAttendance,
         updateAttendanceRecord,
         deleteAttendanceRecord,
+        forumPosts,
+        addForumPost,
+        likeForumPost,
+        addForumComment,
+        deleteForumPost,
       }}
     >
       {children}

@@ -51,7 +51,15 @@ export const ScheduleMemberView: React.FC = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const classSchedules = schedules.filter((s) => s.classId === currentClass?.id);
+  const classSchedules = schedules.filter(
+    (s) =>
+      !currentClass ||
+      s.classId === currentClass.id ||
+      s.classId === currentClass.code ||
+      (currentClass.name && s.classId === currentClass.name) ||
+      s.classId === 'class-1' ||
+      s.classId === 'global'
+  );
   const daySchedules = classSchedules
     .filter((s) => s.day === selectedDay)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));

@@ -21,6 +21,7 @@ export const NotificationCenterModal: React.FC = () => {
     sendTestPushAlert,
     cleanStaleCacheAndSync,
     showToast,
+    isNotificationReadLocally,
     setActiveTab,
   } = useApp();
 
@@ -29,18 +30,27 @@ export const NotificationCenterModal: React.FC = () => {
   if (!isNotificationDrawerOpen) return null;
 
   const activeClassId = currentClass?.id || currentUser?.classId;
+  const activeClassCode = currentClass?.code;
 
   // Filter notifications strictly for this class and role (or all if Owner)
   const classNotifications = notifications.filter((n) => {
     // 1. Direct Recipient Check: If sent to a specific user, must match currentUser.id
     if (n.recipientId && currentUser) {
-      return n.recipientId === currentUser.id;
+      if (n.recipientId !== currentUser.id) return false;
     }
 
     // 2. Owner sees all system & broadcast notifications
     if (currentRole === 'owner') return true;
 
-    // 3. Admin Role Filtering
+    // 3. STRICT CLASS ISOLATION: If notification belongs to a specific class, it MUST match current user's class!
+    if (n.classId) {
+      const matchesMyClass =
+        (activeClassId && n.classId === activeClassId) ||
+        (activeClassCode && n.classId === activeClassCode);
+      if (!matchesMyClass) return false;
+    }
+
+    // 4. Admin Role Filtering
     if (currentRole === 'admin') {
       // Hide older historical notifications created before this admin account was registered
       const regTimeStr = (currentUser && localStorage.getItem(`rt_admin_reg_time_${currentUser.id}`)) || currentUser?.createdAt;
@@ -58,18 +68,12 @@ export const NotificationCenterModal: React.FC = () => {
         }
         return false;
       }
-      if (n.classId && activeClassId && n.classId !== activeClassId) {
-        return false;
-      }
       return true;
     }
 
-    // 4. Member Role Filtering
+    // 5. Member Role Filtering
     if (currentRole === 'member') {
       if (n.targetRole && n.targetRole !== 'member' && n.targetRole !== 'all') {
-        return false;
-      }
-      if (n.classId && activeClassId && n.classId !== activeClassId) {
         return false;
       }
       return true;
@@ -151,16 +155,16 @@ export const NotificationCenterModal: React.FC = () => {
             <div className="flex items-center gap-1.5 flex-wrap">
               <button
                 onClick={markAllNotificationsAsRead}
-                disabled={!classNotifications.some((n) => !n.read)}
+                disabled={!classNotifications.some((n) => !n.read && !isNotificationReadLocally(n.id, currentUser?.id))}
                 className={`font-semibold flex items-center gap-1 cursor-pointer transition-colors px-2 py-1 rounded-lg text-xs ${
-                  classNotifications.some((n) => !n.read)
+                  classNotifications.some((n) => !n.read && !isNotificationReadLocally(n.id, currentUser?.id))
                     ? 'text-pink-400 hover:text-pink-300 hover:bg-pink-500/10'
                     : 'text-slate-500 cursor-not-allowed opacity-50'
                 }`}
                 title="Tandai semua notifikasi telah dibaca"
               >
                 <CheckCheck className="w-3.5 h-3.5" />
-                <span>{classNotifications.some((n) => !n.read) ? 'Tandai Dibaca' : 'Sudah Dibaca'}</span>
+                <span>{classNotifications.some((n) => !n.read && !isNotificationReadLocally(n.id, currentUser?.id)) ? 'Tandai Dibaca' : 'Sudah Dibaca'}</span>
               </button>
 
               {confirmDeleteAll ? (
@@ -210,6 +214,7 @@ export const NotificationCenterModal: React.FC = () => {
             </div>
           ) : (
             classNotifications.map((notif) => {
+              const isRead = notif.read || isNotificationReadLocally(notif.id, currentUser?.id);
               return (
                 <div
                   key={notif.id}
@@ -218,7 +223,7 @@ export const NotificationCenterModal: React.FC = () => {
                     playNotificationSound('beep');
                   }}
                   className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
-                    notif.read
+                    isRead
                       ? 'bg-[#18181a]/80 border-white/5 text-slate-400'
                       : 'bg-[#222226]/95 border-white/10 text-white shadow-lg'
                   }`}
@@ -233,7 +238,7 @@ export const NotificationCenterModal: React.FC = () => {
 
                     <div className="flex-1 min-w-0 pr-1">
                       <div className="flex items-baseline justify-between gap-2">
-                        <h3 className={`text-xs font-bold truncate ${notif.read ? 'text-slate-300' : 'text-white'}`}>
+                        <h3 className={`text-xs font-bold truncate ${isRead ? 'text-slate-300' : 'text-white'}`}>
                           {notif.title}
                         </h3>
                         <span className="text-[10px] text-slate-400 font-medium shrink-0 font-mono">
@@ -246,7 +251,7 @@ export const NotificationCenterModal: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
-                      {!notif.read && (
+                      {!isRead && (
                         <span className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
                       )}
                       <button

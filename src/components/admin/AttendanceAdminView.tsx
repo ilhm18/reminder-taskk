@@ -1133,7 +1133,6 @@ export const AttendanceAdminView: React.FC = () => {
 
                                 <td className="p-3.5">
                                   <div className="font-bold text-white text-xs">{stu.name}</div>
-                                  <span className="text-[10px] text-slate-400 font-mono">{stu.email || 'Tanpa Email'}</span>
                                 </td>
 
                                 <td className="p-3.5">
@@ -1281,7 +1280,6 @@ export const AttendanceAdminView: React.FC = () => {
                               </td>
                               <td className="p-3.5 sticky left-12 bg-[#120e28]">
                                 <div className="font-bold text-white text-xs">{stu.name}</div>
-                                <span className="text-[10px] text-slate-400 font-mono">{stu.email || '-'}</span>
                               </td>
 
                               {classSessions.map((sess) => {

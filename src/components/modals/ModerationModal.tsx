@@ -58,6 +58,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
   const [isFullScreenImage, setIsFullScreenImage] = useState(false);
   const [imageError, setImageError] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
+  const [savedScrollPos, setSavedScrollPos] = useState<number | null>(null);
 
   if (!isOpen || !submission) return null;
 
@@ -66,27 +67,89 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
   const fileCategory = getFileCategory(fileName, fileUrl);
   const fileExt = fileName.split('.').pop()?.toUpperCase() || 'FILE';
 
-  const handleApprove = () => {
+  const handleApprove = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    // Capture current scroll position from both window and main container into state
+    const currentScrollY =
+      window.scrollY ||
+      document.documentElement.scrollTop ||
+      document.querySelector('main')?.scrollTop ||
+      0;
+    setSavedScrollPos(currentScrollY);
+
     moderateSubmission(submission.id, 'completed', feedback);
     onClose();
+
+    // Reapply scroll position after DOM update
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+      const mainEl = document.querySelector('main');
+      if (mainEl && currentScrollY > 0) {
+        mainEl.scrollTop = currentScrollY;
+      }
+    });
   };
 
-  const handleRevision = () => {
+  const handleRevision = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    const currentScrollY =
+      window.scrollY ||
+      document.documentElement.scrollTop ||
+      document.querySelector('main')?.scrollTop ||
+      0;
+    setSavedScrollPos(currentScrollY);
+
     moderateSubmission(
       submission.id,
       'revision',
       feedback || 'Perlu perbaikan berkas atau kelengkapan data.'
     );
     onClose();
+
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+      const mainEl = document.querySelector('main');
+      if (mainEl && currentScrollY > 0) {
+        mainEl.scrollTop = currentScrollY;
+      }
+    });
   };
 
-  const handleReject = () => {
+  const handleReject = (e?: React.MouseEvent) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+
+    const currentScrollY =
+      window.scrollY ||
+      document.documentElement.scrollTop ||
+      document.querySelector('main')?.scrollTop ||
+      0;
+    setSavedScrollPos(currentScrollY);
+
     moderateSubmission(
       submission.id,
       'rejected',
       feedback || 'Pengajuan tugas ditolak karena tidak sesuai kriteria.'
     );
     onClose();
+
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: currentScrollY, behavior: 'instant' });
+      const mainEl = document.querySelector('main');
+      if (mainEl && currentScrollY > 0) {
+        mainEl.scrollTop = currentScrollY;
+      }
+    });
   };
 
   const handleDownload = () => {
@@ -579,7 +642,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
           <div className="mt-5 pt-3.5 border-t border-[#241c40] flex flex-wrap items-center justify-between gap-2.5">
             <button
               type="button"
-              onClick={handleReject}
+              onClick={(e) => handleReject(e)}
               className="px-3.5 py-2 rounded-xl text-xs font-semibold text-red-400 hover:bg-red-500/10 border border-red-500/25 transition-colors cursor-pointer flex items-center gap-1.5"
             >
               <ThumbsDown className="w-3.5 h-3.5" />
@@ -589,7 +652,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={handleRevision}
+                onClick={(e) => handleRevision(e)}
                 className="px-3.5 py-2 rounded-xl text-xs font-semibold text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 transition-colors cursor-pointer flex items-center gap-1.5"
               >
                 <RotateCcw className="w-3.5 h-3.5" />
@@ -597,7 +660,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={handleApprove}
+                onClick={(e) => handleApprove(e)}
                 className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-md shadow-emerald-500/20 transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
               >
                 <ThumbsUp className="w-3.5 h-3.5" />

@@ -55,7 +55,15 @@ export const ScheduleManagementView: React.FC = () => {
   const [formNotes, setFormNotes] = useState('');
   const [formColor, setFormColor] = useState(SUBJECT_COLORS[0].bg);
 
-  const classSchedules = schedules.filter((s) => s.classId === currentClass?.id);
+  const classSchedules = schedules.filter(
+    (s) =>
+      !currentClass ||
+      s.classId === currentClass.id ||
+      s.classId === currentClass.code ||
+      (currentClass.name && s.classId === currentClass.name) ||
+      s.classId === 'class-1' ||
+      s.classId === 'global'
+  );
   const daySchedules = classSchedules
     .filter((s) => s.day === selectedDay)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));

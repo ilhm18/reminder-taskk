@@ -313,6 +313,8 @@ export type AttendanceVerificationMethod = 'qr_scan' | 'rolling_token' | 'manual
 export interface AttendanceSession {
   id: string;
   classId: string;
+  className?: string;
+  code?: string;
   title: string;
   subject?: string;
   date: string; // YYYY-MM-DD
@@ -339,10 +341,52 @@ export interface AttendanceRecord {
   studentEmail?: string;
   status: AttendanceStatus;
   checkInTime: string;
+  timestamp?: string;
   deviceInfo?: string;
   verificationMethod: AttendanceVerificationMethod;
   note?: string;
+  proofFileUrl?: string;
+  proofFileName?: string;
+  distanceMeters?: number;
+  isWithinRadius?: boolean;
   locationVerified?: boolean;
+  createdAt: string;
+}
+
+// Forum Types
+export type ForumCategory = 'semua' | 'umum' | 'diskusi' | 'tanya_jawab' | 'materi' | 'informasi' | 'jasa' | 'karya';
+
+export interface ForumComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: 'admin' | 'member' | 'owner';
+  authorAvatar?: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface ForumPost {
+  id: string;
+  classId: string;
+  className?: string;
+  scope: 'class' | 'global';
+  category: ForumCategory;
+  authorId: string;
+  authorName: string;
+  authorRole: 'admin' | 'member' | 'owner';
+  authorAvatar?: string;
+  authorClass?: string;
+  title: string;
+  content: string;
+  price?: string;
+  contact?: string;
+  imageUrl?: string;
+  imageFileName?: string;
+  tags: string[];
+  likes: number;
+  likedBy: string[];
+  comments: ForumComment[];
   createdAt: string;
 }
 

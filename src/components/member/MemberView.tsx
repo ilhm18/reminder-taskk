@@ -40,6 +40,8 @@ import {
   Fish,
   HelpCircle,
   QrCode,
+  Globe,
+  MessageSquareDashed,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Task, ClassMaterial } from '../../types';
@@ -50,7 +52,6 @@ import { SubmissionModal } from '../modals/SubmissionModal';
 import { AIChatTutor } from './AIChatTutor';
 import { StudyFocusTools } from './StudyFocusTools';
 import { StudentMiniGame } from './StudentMiniGame';
-import { VirtualPetView } from './VirtualPetView';
 import { ScheduleMemberView } from './ScheduleMemberView';
 import { AnonymousWallSection } from './AnonymousWallSection';
 import { CreatorDonationCard } from '../common/CreatorDonationCard';
@@ -58,9 +59,9 @@ import { FeedbackView } from '../common/FeedbackView';
 import { OwnerChatView } from '../common/OwnerChatView';
 import { MemberSettingsView } from './MemberSettingsView';
 import { MemberAdminChatView } from './MemberAdminChatView';
-import { DigitalAquarium } from './DigitalAquarium';
 import { QuestionBankMemberView } from './QuestionBankMemberView';
 import { AttendanceMemberView } from './AttendanceMemberView';
+import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { formatIndonesianDate, getTaskDeadlineStatus, playNotificationSound } from '../../utils/notification';
@@ -86,19 +87,38 @@ export const MemberView: React.FC = () => {
     classChats,
     questionBanks,
     attendanceSessions,
+    forumPosts,
   } = useApp();
 
-  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'jadwal' | 'pet' | 'aquarium' | 'ai_tutor' | 'fokus' | 'game' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
+  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'jadwal' | 'forum' | 'ai_tutor' | 'fokus' | 'game' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
 
-  // Count unread chats from admin
-  const unreadAdminChatsCount = useMemo(() => {
+  // Count unread chats from admin, other students, or owner
+  const unreadChatsCount = useMemo(() => {
     return classChats.filter(
       (c) =>
-        c.recipientId === currentUser?.id &&
-        c.senderRole === 'admin' &&
+        (c.recipientId === currentUser?.id || (currentUser?.role === 'member' && c.recipientId === 'member')) &&
         !c.isRead
     ).length;
   }, [classChats, currentUser]);
+
+  // Track unread/new forum posts
+  const [lastViewedForumTime, setLastViewedForumTime] = useState<number>(() => {
+    try {
+      return parseInt(localStorage.getItem('rt_last_viewed_forum_' + (currentUser?.id || 'member')) || '0', 10);
+    } catch {
+      return 0;
+    }
+  });
+
+  const hasUnreadForum = useMemo(() => {
+    if (!forumPosts || forumPosts.length === 0) return false;
+    return forumPosts.some((p) => {
+      const isForClass = p.scope === 'global' || p.classId === currentClass?.id || (currentUser?.classId && p.classId === currentUser.classId);
+      const isNew = new Date(p.createdAt).getTime() > lastViewedForumTime;
+      const isNotMe = p.authorId !== currentUser?.id;
+      return isForClass && isNew && isNotMe;
+    });
+  }, [forumPosts, lastViewedForumTime, currentClass, currentUser]);
 
   const getMemberTabFromUrl = (): MemberTab => {
     try {
@@ -127,10 +147,13 @@ export const MemberView: React.FC = () => {
         quiz: 'bank_soal',
         jadwal: 'jadwal',
         schedule: 'jadwal',
-        pet: 'pet',
-        peliharaan: 'pet',
-        aquarium: 'aquarium',
-        'digital-aquarium': 'aquarium',
+        forum: 'forum',
+        'forum-kelas': 'forum',
+        'forum-global': 'forum',
+        jasa: 'forum',
+        market: 'forum',
+        marketplace: 'forum',
+        feed: 'forum',
         ai_tutor: 'ai_tutor',
         ai: 'ai_tutor',
         chat: 'ai_tutor',
@@ -236,8 +259,8 @@ export const MemberView: React.FC = () => {
 
   const getCategoryForTab = (tab: MemberTab): 'akademik' | 'hiburan' | 'komunikasi' | 'lainnya' => {
     if (['dashboard', 'tugas', 'absensi', 'bank_soal', 'jadwal', 'kalender', 'statistik', 'fokus'].includes(tab)) return 'akademik';
-    if (['ai_tutor', 'aquarium', 'pet', 'game'].includes(tab)) return 'hiburan';
-    if (['saran', 'chat_admin', 'chat_owner', 'anonwall'].includes(tab)) return 'komunikasi';
+    if (['ai_tutor', 'game'].includes(tab)) return 'hiburan';
+    if (['forum', 'anonwall', 'saran', 'chat_admin', 'chat_owner'].includes(tab)) return 'komunikasi';
     return 'lainnya';
   };
 
@@ -271,6 +294,17 @@ export const MemberView: React.FC = () => {
     });
   }, [attendanceSessions, currentClass, currentUser]);
 
+  // When activeTab changes to 'forum', mark forum as viewed
+  useEffect(() => {
+    if (activeTab === 'forum') {
+      const now = Date.now();
+      setLastViewedForumTime(now);
+      try {
+        localStorage.setItem('rt_last_viewed_forum_' + (currentUser?.id || 'member'), now.toString());
+      } catch {}
+    }
+  }, [activeTab, currentUser?.id]);
+
   const categories: MenuCategory[] = [
     {
       id: 'akademik',
@@ -278,34 +312,34 @@ export const MemberView: React.FC = () => {
       icon: BookOpen,
       tabs: [
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-        { id: 'absensi', label: 'Absensi Kelas', icon: QrCode, iconColor: 'text-emerald-400', badge: hasActiveAttendance ? 1 : undefined },
-        { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen, badge: activeTasksCount > 0 ? activeTasksCount : undefined },
-        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle, badge: publishedQuizzesCount > 0 ? publishedQuizzesCount : undefined },
-        { id: 'jadwal', label: 'Jadwal Pelajaran', icon: CalendarDays },
+        { id: 'absensi', label: 'Absensi Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
+        { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen },
+        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle },
+        { id: 'jadwal', label: 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
         { id: 'kalender', label: 'Kalender', icon: Calendar },
         { id: 'statistik', label: 'Statistik', icon: BarChart3 },
         { id: 'fokus', label: 'Zona Fokus', icon: Clock },
       ],
     },
     {
-      id: 'hiburan',
-      label: 'AI & Hiburan',
-      icon: Sparkles,
+      id: 'komunikasi',
+      label: 'Komunikasi & Forum',
+      icon: Globe,
       tabs: [
-        { id: 'ai_tutor', label: 'AI Assistant', icon: Sparkles, iconColor: 'text-amber-300' },
-        { id: 'aquarium', label: 'Digital Aquarium', icon: Waves, iconColor: 'text-cyan-400' },
-        { id: 'pet', label: 'Peliharaan', icon: Cat, iconColor: 'text-pink-400' },
-        { id: 'game', label: 'Arena Game', icon: Gamepad2, iconColor: 'text-amber-400' },
+        { id: 'forum', label: 'Forum & Jasa', icon: Globe, iconColor: 'text-pink-400', badge: hasUnreadForum ? 1 : undefined },
+        { id: 'anonwall', label: 'Pesan Anonim', icon: MessageSquareDashed, iconColor: 'text-amber-400' },
+        { id: 'chat_admin', label: 'Chat & Pesan', icon: MessageSquare, badge: unreadChatsCount > 0 ? unreadChatsCount : undefined, iconColor: 'text-pink-400' },
+        { id: 'chat_owner', label: 'Chat Owner', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
+        { id: 'saran', label: 'Kritik & Saran', icon: MessageSquarePlus },
       ],
     },
     {
-      id: 'komunikasi',
-      label: 'Komunikasi',
-      icon: MessageSquare,
+      id: 'hiburan',
+      label: 'AI & Game',
+      icon: Sparkles,
       tabs: [
-        { id: 'chat_admin', label: 'Chat Admin', icon: MessageSquare, badge: unreadAdminChatsCount > 0 ? unreadAdminChatsCount : undefined },
-        { id: 'chat_owner', label: 'Chat Owner', icon: MessageSquarePlus },
-        { id: 'saran', label: 'Kritik & Saran', icon: MessageSquarePlus },
+        { id: 'ai_tutor', label: 'AI Assistant', icon: Sparkles, iconColor: 'text-amber-300' },
+        { id: 'game', label: 'Arena Game', icon: Gamepad2, iconColor: 'text-amber-400' },
       ],
     },
     {
@@ -313,7 +347,7 @@ export const MemberView: React.FC = () => {
       label: 'Pengaturan',
       icon: Settings,
       tabs: [
-        { id: 'setting', label: 'Pengaturan', icon: Settings },
+        { id: 'setting', label: 'Pengaturan Profil', icon: Settings },
         { id: 'creator', label: 'Developer & Donasi', icon: Heart, iconColor: 'text-pink-400' },
       ],
     },
@@ -411,8 +445,7 @@ export const MemberView: React.FC = () => {
               const CatIcon = cat.icon;
               const isCatActive = activeCategory === cat.id;
               const hasBadge =
-                (cat.id === 'akademik' && activeTasksCount > 0) ||
-                (cat.id === 'komunikasi' && unreadAdminChatsCount > 0);
+                cat.id === 'komunikasi' && (unreadChatsCount > 0 || hasUnreadForum);
               return (
                 <button
                   key={cat.id}
@@ -835,30 +868,30 @@ export const MemberView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Card 2: Peliharaan Virtual */}
+              {/* Card 2: Forum & Marketplace Jasa */}
               <div
-                onClick={() => setActiveTab('pet')}
+                onClick={() => setActiveTab('forum')}
                 className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#251336] via-[#1c0f2b] to-[#130b1f] border border-pink-500/35 hover:border-pink-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
               >
                 <div className="absolute top-0 right-0 w-28 h-28 bg-pink-500/10 rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors pointer-events-none" />
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-500 flex items-center justify-center text-white shadow-lg shadow-pink-500/25 text-xl">
-                      🐾
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
+                      <Globe className="w-5 h-5 text-white" />
                     </div>
                     <span className="px-2 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-[9px] font-bold text-pink-300">
-                      Virtual Pet ✨
+                      Komunitas &amp; Layanan
                     </span>
                   </div>
                   <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
-                    Peliharaan Virtual
+                    Forum Kelas &amp; Global
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    Beri makan, rawat, dan dandani peliharaan lucumu. Selesaikan tugas kelas untuk naik level &amp; evolusi!
+                    Wadah publikasi karya siswa, diskusi akademik, pertukaran layanan keahlian, dan komunikasi antarsiswa.
                   </p>
                 </div>
                 <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
-                  <span>Lihat Pet &amp; Rawat</span>
+                  <span>Buka Forum &amp; Komunitas</span>
                   <span className="transition-transform group-hover:translate-x-1">→</span>
                 </div>
               </div>
@@ -1438,10 +1471,17 @@ export const MemberView: React.FC = () => {
           </div>
         )}
 
-        {/* TAB: PELIHARAAN VIRTUAL */}
-        {activeTab === 'pet' && (
+        {/* TAB: FORUM KELAS & GLOBAL + MARKETPLACE JASA */}
+        {activeTab === 'forum' && (
           <div className="space-y-4 animate-in fade-in duration-200">
-            <VirtualPetView />
+            <ForumView />
+          </div>
+        )}
+
+        {/* TAB: PESAN ANONIM */}
+        {activeTab === 'anonwall' && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            <AnonymousWallSection />
           </div>
         )}
 
@@ -1555,12 +1595,6 @@ export const MemberView: React.FC = () => {
         )}
 
         {/* TAB 7: CREATOR & INFORMASI PEMBUAT */}
-        {activeTab === 'aquarium' && (
-          <div className="space-y-4 animate-in fade-in duration-200">
-            <DigitalAquarium />
-          </div>
-        )}
-
         {activeTab === 'creator' && (
           <div className="space-y-6 animate-in fade-in duration-200">
             <CreatorDonationCard variant="full" />

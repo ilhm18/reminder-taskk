@@ -397,9 +397,6 @@ export const QuestionBankOwnerView: React.FC = () => {
                         </div>
                         <div>
                           <span>{sub.memberName}</span>
-                          {sub.memberEmail && (
-                            <span className="text-[10px] text-slate-400 block font-normal">{sub.memberEmail}</span>
-                          )}
                         </div>
                       </td>
                       <td className="py-3.5 text-slate-300 font-medium">

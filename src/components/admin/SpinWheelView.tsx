@@ -83,8 +83,10 @@ const WHEEL_COLORS = [
 const DEFAULT_SAMPLE_NAMES: string[] = [];
 
 export const SpinWheelView: React.FC = () => {
-  const { currentClass, users, showToast } = useApp();
+  const { currentClass, users, showToast, addActivityLog, currentUser } = useApp();
   const [mode, setMode] = useState<'spin' | 'groups'>('spin');
+
+  const historyStorageKey = `rt_spin_history_${currentClass?.id || 'default'}`;
 
   // Candidate names - initialized as empty unless class members exist
   const [namesText, setNamesText] = useState(() => {
@@ -104,8 +106,22 @@ export const SpinWheelView: React.FC = () => {
   const [isSpinning, setIsSpinning] = useState(false);
   const [rotationAngle, setRotationAngle] = useState(0);
   const [winner, setWinner] = useState<string | null>(null);
-  const [spinHistory, setSpinHistory] = useState<string[]>([]);
+  const [spinHistory, setSpinHistory] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(historyStorageKey);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [removeWinnerOnSpin, setRemoveWinnerOnSpin] = useState(false);
+
+  // Sync spinHistory to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem(historyStorageKey, JSON.stringify(spinHistory));
+    } catch {}
+  }, [spinHistory, historyStorageKey]);
 
   // Group Generator States
   const [groupCount, setGroupCount] = useState<number>(5); // e.g. 5 groups for 40 people
@@ -120,14 +136,15 @@ export const SpinWheelView: React.FC = () => {
       showToast('Belum ada siswa terdaftar di kelas ini.', 'info');
     } else {
       setNamesText(classMembers.map((m) => m.name).join('\n'));
-      showToast(`Berhasil memuat ${classMembers.length} siswa dari kelas ${currentClass?.name}.`, 'success');
+      showToast(`Berhasil memuat ${classMembers.length} siswa dari database kelas ${currentClass?.name}.`, 'success');
     }
   };
 
   // SPIN WHEEL LOGIC
   const handleSpin = () => {
-    if (isSpinning || parsedNames.length < 2) {
-      if (parsedNames.length < 2) {
+    const activeItems = parsedNames.slice(0, 36);
+    if (isSpinning || activeItems.length < 2) {
+      if (activeItems.length < 2) {
         showToast('Masukkan minimal 2 nama siswa untuk memutar roda spin!', 'warn');
       }
       return;
@@ -137,15 +154,25 @@ export const SpinWheelView: React.FC = () => {
     setWinner(null);
     playSpinSound('tick');
 
-    // Generate random rotations: 5 to 8 full spins (1800° - 2880°) + random offset
-    const numItems = parsedNames.length;
-    const sliceDeg = 360 / numItems;
-    const selectedIndex = Math.floor(Math.random() * numItems);
+    const count = activeItems.length;
+    const sliceDeg = 360 / count;
+    const selectedIndex = Math.floor(Math.random() * count);
     
-    // In SVG coordinate where 0deg pointer is at the top (270deg standard or top 90deg offset)
-    const targetSliceCenter = selectedIndex * sliceDeg + sliceDeg / 2;
-    const extraSpins = (Math.floor(Math.random() * 4) + 6) * 360; // 6 to 9 full spins
-    const totalRotation = rotationAngle + extraSpins + (360 - (targetSliceCenter % 360));
+    // In SVG slice drawing, slice idx spans [idx * sliceDeg, (idx + 1) * sliceDeg] starting from 12 o'clock (0 deg)
+    // Add safe jitter inside the selected slice for natural look
+    const sectorJitter = (Math.random() - 0.5) * (sliceDeg * 0.5);
+    const targetSliceCenter = selectedIndex * sliceDeg + sliceDeg / 2 + sectorJitter;
+    const targetMod = ((360 - (targetSliceCenter % 360)) % 360 + 360) % 360;
+    const currentMod = ((rotationAngle % 360) + 360) % 360;
+    let delta = targetMod - currentMod;
+    if (delta <= 0) delta += 360;
+    const extraSpins = (Math.floor(Math.random() * 3) + 7) * 360; // 7 to 9 full spins
+    const totalRotation = rotationAngle + extraSpins + delta;
+
+    // Compute the exact physical sector under the top pointer (12 o'clock)
+    const finalNormalizedAngle = ((360 - (totalRotation % 360)) % 360 + 360) % 360;
+    const exactWinnerIndex = Math.floor(finalNormalizedAngle / sliceDeg) % count;
+    const chosenWinner = activeItems[exactWinnerIndex] || activeItems[selectedIndex];
 
     // Sound ticking effect during spin
     const startTime = Date.now();
@@ -165,11 +192,21 @@ export const SpinWheelView: React.FC = () => {
     setTimeout(() => {
       clearInterval(tickInterval);
       setIsSpinning(false);
-      const chosenWinner = parsedNames[selectedIndex];
       setWinner(chosenWinner);
       setSpinHistory((prev) => [chosenWinner, ...prev]);
       playSpinSound('winner');
       showToast(`🎉 Terpilih: ${chosenWinner}!`, 'success');
+
+      // Sync log to database activity logs
+      try {
+        addActivityLog(
+          currentUser?.name || 'Admin',
+          'admin',
+          'Roda Spin Undian Kelas',
+          `Siswa terpilih: ${chosenWinner} pada kelas ${currentClass?.name || 'Aktif'}`,
+          'submission'
+        );
+      } catch {}
 
       if (removeWinnerOnSpin) {
         setNamesText((prev) =>
@@ -359,10 +396,25 @@ export const SpinWheelView: React.FC = () => {
 
               {/* Spin Wheel Container with Pointer */}
               <div className="relative my-4 flex items-center justify-center">
-                {/* Pointer Marker at Top */}
-                <div className="absolute -top-3 z-30 flex flex-col items-center pointer-events-none drop-shadow-xl">
-                  <div className="w-6 h-8 bg-gradient-to-b from-amber-300 to-amber-500 clip-triangle shadow-lg transform rotate-180" />
-                  <div className="w-3 h-3 rounded-full bg-white shadow-md -mt-1" />
+                {/* Pointer Marker at Top (Pointing strictly DOWN into 12 o'clock) */}
+                <div className="absolute -top-5 z-30 flex flex-col items-center pointer-events-none drop-shadow-2xl">
+                  <svg width="34" height="42" viewBox="0 0 34 42" fill="none" className="filter drop-shadow-[0_4px_8px_rgba(0,0,0,0.6)]">
+                    <path
+                      d="M17 42 L3 12 C0 7 3 2 9 2 L25 2 C31 2 34 7 31 12 Z"
+                      fill="url(#wheelPointerGrad)"
+                      stroke="#ffffff"
+                      strokeWidth="2.5"
+                    />
+                    <circle cx="17" cy="14" r="4.5" fill="#ffffff" />
+                    <circle cx="17" cy="14" r="2.5" fill="#f59e0b" />
+                    <defs>
+                      <linearGradient id="wheelPointerGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" stopColor="#fbbf24" />
+                        <stop offset="60%" stopColor="#ec4899" />
+                        <stop offset="100%" stopColor="#ef4444" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
                 </div>
 
                 {/* SVG Spinning Wheel */}

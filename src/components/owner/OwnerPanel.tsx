@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Activity,
   BarChart3,
   Bell,
+  BookOpen,
   Building2,
   Calendar,
   CheckCircle2,
@@ -11,6 +12,7 @@ import {
   Edit,
   Eye,
   EyeOff,
+  Globe,
   History,
   Key,
   ListTodo,
@@ -50,6 +52,7 @@ import { FeedbackOwnerView } from './FeedbackOwnerView';
 import { OwnerChatView } from '../common/OwnerChatView';
 import { QuestionBankOwnerView } from './QuestionBankOwnerView';
 import { AttendanceOwnerView } from './AttendanceOwnerView';
+import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { MaintenanceScreen } from '../maintenance/MaintenanceScreen';
@@ -63,6 +66,10 @@ export const OwnerPanel: React.FC = () => {
     classes,
     tasks,
     users,
+    forumPosts,
+    anonymousMessages,
+    feedbacks,
+    ownerChats,
     toggleUserStatus,
     deleteTask,
     addAdminUser,
@@ -82,9 +89,37 @@ export const OwnerPanel: React.FC = () => {
     purgeOrphanedClasses,
     systemSettings,
     updateSystemSettings,
+    classChats,
   } = useApp();
 
-  type OwnerTab = 'dashboard' | 'admins' | 'kelas' | 'tugas' | 'bank_soal' | 'absensi' | 'anonwall' | 'statistik' | 'kalender' | 'aktivitas' | 'supabase' | 'saran' | 'chat' | 'maintenance' | 'settings';
+  type OwnerTab = 'dashboard' | 'admins' | 'kelas' | 'tugas' | 'forum' | 'bank_soal' | 'absensi' | 'anonwall' | 'statistik' | 'kalender' | 'aktivitas' | 'supabase' | 'saran' | 'chat' | 'maintenance' | 'settings';
+
+  // Count unread chats for owner
+  const unreadOwnerChatsCount = useMemo(() => {
+    return classChats.filter(
+      (c) =>
+        (c.recipientId === currentUser?.id || c.recipientId === 'owner') &&
+        !c.isRead
+    ).length;
+  }, [classChats, currentUser]);
+
+  // Track unread/new forum posts
+  const [lastViewedForumTime, setLastViewedForumTime] = useState<number>(() => {
+    try {
+      return parseInt(localStorage.getItem('rt_last_viewed_forum_' + (currentUser?.id || 'owner')) || '0', 10);
+    } catch {
+      return 0;
+    }
+  });
+
+  const hasUnreadForum = useMemo(() => {
+    if (!forumPosts || forumPosts.length === 0) return false;
+    return forumPosts.some((p) => {
+      const isNew = new Date(p.createdAt).getTime() > lastViewedForumTime;
+      const isNotMe = p.authorId !== currentUser?.id;
+      return isNew && isNotMe;
+    });
+  }, [forumPosts, lastViewedForumTime, currentUser]);
 
   const getOwnerTabFromUrl = (): OwnerTab => {
     try {
@@ -102,6 +137,12 @@ export const OwnerPanel: React.FC = () => {
         tugas: 'tugas',
         task: 'tugas',
         tasks: 'tugas',
+        forum: 'forum',
+        'forum-kelas': 'forum',
+        'forum-global': 'forum',
+        jasa: 'forum',
+        market: 'forum',
+        marketplace: 'forum',
         bank_soal: 'bank_soal',
         banksoal: 'bank_soal',
         'bank-soal': 'bank_soal',
@@ -266,16 +307,76 @@ export const OwnerPanel: React.FC = () => {
     const seen = new Set<string>();
     return users.filter((u) => {
       if (u.role !== 'admin') return false;
-      const idKey = u.id ? u.id.trim() : '';
-      const emailKey = u.email ? u.email.trim().toLowerCase() : '';
-      if ((idKey && seen.has(idKey)) || (emailKey && seen.has(emailKey))) {
+      const key = u.id ? u.id.trim() : (u.username || u.name).toLowerCase();
+      if (seen.has(key)) {
         return false;
       }
-      if (idKey) seen.add(idKey);
-      if (emailKey) seen.add(emailKey);
+      seen.add(key);
       return true;
     });
   }, [users]);
+
+  interface OwnerMenuItem {
+    id: OwnerTab;
+    label: string;
+    icon: any;
+    badge?: number;
+    iconColor?: string;
+  }
+
+  interface OwnerMenuGroup {
+    title: string;
+    items: OwnerMenuItem[];
+  }
+
+  useEffect(() => {
+    if (activeTab === 'forum') {
+      const now = Date.now();
+      setLastViewedForumTime(now);
+      try {
+        localStorage.setItem('rt_last_viewed_forum_' + (currentUser?.id || 'owner'), now.toString());
+      } catch {}
+    }
+  }, [activeTab, currentUser?.id]);
+
+  const ownerMenuGroups: OwnerMenuGroup[] = [
+    {
+      title: 'Akademik & Kelas',
+      items: [
+        { id: 'dashboard', label: 'Dashboard', icon: Activity },
+        { id: 'admins', label: 'User Admin', icon: Shield },
+        { id: 'kelas', label: 'Ruang Kelas', icon: Building2 },
+        { id: 'tugas', label: 'Semua Tugas', icon: ListTodo },
+        { id: 'absensi', label: 'Rekap Absensi Global', icon: QrCode, iconColor: 'text-emerald-400' },
+        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle, iconColor: 'text-purple-400' },
+        { id: 'kalender', label: 'Kalender Tugas', icon: Calendar },
+        { id: 'statistik', label: 'Statistik & Analisis', icon: TrendingUp },
+      ],
+    },
+    {
+      title: 'Komunikasi & Forum',
+      items: [
+        { id: 'forum', label: 'Forum & Jasa', icon: Globe, iconColor: 'text-pink-400', badge: hasUnreadForum ? 1 : undefined },
+        { id: 'anonwall', label: 'Pesan Anonim Siswa', icon: MessageSquareDashed, iconColor: 'text-amber-400' },
+        { id: 'chat', label: 'Chat Masuk / Konsultasi', icon: MessageSquare, badge: unreadOwnerChatsCount || undefined, iconColor: 'text-pink-400' },
+        { id: 'saran', label: 'Kritik & Saran', icon: MessageSquare, iconColor: 'text-pink-400' },
+      ],
+    },
+    {
+      title: 'Sistem & Infrastruktur',
+      items: [
+        { id: 'aktivitas', label: 'Log Aktivitas Sistem', icon: History },
+        { id: 'supabase', label: 'Server Supabase', icon: Server, iconColor: 'text-emerald-400' },
+        { id: 'maintenance', label: 'Kontrol Maintenance', icon: Wrench, iconColor: 'text-amber-400' },
+      ],
+    },
+    {
+      title: 'Pengaturan',
+      items: [
+        { id: 'settings', label: 'Pengaturan Profil', icon: Sliders, iconColor: 'text-amber-400' },
+      ],
+    },
+  ];
 
   const generateRandomClassCode = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -288,7 +389,6 @@ export const OwnerPanel: React.FC = () => {
 
   const handleOpenAddAdminModal = () => {
     setNewAdminName('');
-    setNewAdminEmail('');
     setNewAdminPassword('');
     setNewClassName('');
     setNewAdminClassCode(generateRandomClassCode());
@@ -299,7 +399,6 @@ export const OwnerPanel: React.FC = () => {
     const adminClass = classes.find((c) => c.adminId === admin.id || c.id === admin.classId);
     setEditingAdmin(admin);
     setEditAdminName(admin.name);
-    setEditAdminEmail(admin.email || '');
     setEditAdminPassword(admin.password || 'password123');
     setEditAdminClassName(admin.className || adminClass?.name || '');
     setShowEditPassword(false);
@@ -312,7 +411,6 @@ export const OwnerPanel: React.FC = () => {
     const updatedUser: User = {
       ...editingAdmin,
       name: editAdminName.trim(),
-      email: editAdminEmail.trim(),
       password: editAdminPassword.trim() || 'password123',
       className: editAdminClassName.trim() || editingAdmin.className,
     };
@@ -325,7 +423,6 @@ export const OwnerPanel: React.FC = () => {
           .from('profiles')
           .update({
             name: updatedUser.name,
-            email: updatedUser.email,
             password: updatedUser.password,
             class_name: updatedUser.className,
           })
@@ -349,7 +446,7 @@ export const OwnerPanel: React.FC = () => {
       currentUser?.name || 'Owner',
       'owner',
       'Pembaruan Akun Admin',
-      `Owner memperbarui profil & password admin ${updatedUser.name} (${updatedUser.email})`,
+      `Owner memperbarui profil & password admin ${updatedUser.name}`,
       'admin'
     );
 
@@ -364,10 +461,6 @@ export const OwnerPanel: React.FC = () => {
       showToast('Nama Owner tidak boleh kosong.', 'warn');
       return;
     }
-    if (!ownerEmail.trim() || !ownerEmail.includes('@')) {
-      showToast('Alamat email Owner tidak valid.', 'warn');
-      return;
-    }
 
     setIsSavingOwnerSettings(true);
     const client = getSupabaseClient();
@@ -378,7 +471,6 @@ export const OwnerPanel: React.FC = () => {
           .upsert({
             id: currentUser.id,
             name: ownerName.trim(),
-            email: ownerEmail.trim().toLowerCase(),
             password: ownerPassword.trim() || 'ilhaM@1810',
             role: 'owner',
             status: 'active',
@@ -387,7 +479,7 @@ export const OwnerPanel: React.FC = () => {
         if (error) throw error;
 
         showToast('Pengaturan profil Owner berhasil disimpan permanen ke database Supabase!', 'success');
-        addActivityLog(ownerName, 'owner', 'Update Profil Owner', `Owner memperbarui nama, email (${ownerEmail}), dan password.`, 'system');
+        addActivityLog(ownerName, 'owner', 'Update Profil Owner', `Owner memperbarui nama dan password.`, 'system');
         
         await syncWithSupabase();
       } catch (err: any) {
@@ -434,16 +526,17 @@ export const OwnerPanel: React.FC = () => {
 
   const handleCreateNewAdmin = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newAdminName.trim() || !newAdminEmail.trim() || !newClassName.trim()) {
-      showToast('Harap lengkapi semua bidang.', 'warn');
+    if (!newAdminName.trim() || !newClassName.trim()) {
+      showToast('Harap lengkapi nama admin dan nama kelas.', 'warn');
       return;
     }
 
     const finalCode = newAdminClassCode.trim() || generateRandomClassCode();
+    const cleanUsername = newAdminName.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
     await addAdminUser({
       name: newAdminName.trim(),
-      email: newAdminEmail.trim(),
+      username: cleanUsername,
       password: newAdminPassword.trim() || 'password123',
       className: newClassName.trim(),
       classCode: finalCode,
@@ -458,7 +551,6 @@ export const OwnerPanel: React.FC = () => {
     );
 
     setNewAdminName('');
-    setNewAdminEmail('');
     setNewAdminPassword('');
     setNewClassName('');
     setNewAdminClassCode('');
@@ -548,7 +640,7 @@ export const OwnerPanel: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="font-bold text-xs text-white">Owner Control</h3>
-                    <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{currentUser?.email || 'Owner'}</p>
+                    <p className="text-[10px] text-slate-400 truncate max-w-[150px]">Owner Administrator</p>
                   </div>
                 </div>
                 <button
@@ -559,51 +651,51 @@ export const OwnerPanel: React.FC = () => {
                 </button>
               </div>
 
-              {/* Navigation links */}
-              <div className="space-y-1.5">
-                {[
-                  { id: 'dashboard', label: 'Dashboard', icon: Activity },
-                  { id: 'admins', label: 'User Admin', icon: Shield },
-                  { id: 'kelas', label: 'Kelas', icon: Building2 },
-                  { id: 'tugas', label: 'Semua Tugas', icon: ListTodo },
-                  { id: 'absensi', label: 'Rekap Absensi Semua Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
-                  { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle, iconColor: 'text-purple-400' },
-                  { id: 'anonwall', label: 'Pesan Anonim', icon: MessageSquareDashed },
-                  { id: 'statistik', label: 'Statistik', icon: TrendingUp },
-                  { id: 'kalender', label: 'Kalender Tugas', icon: Calendar },
-                  { id: 'aktivitas', label: 'Log Aktivitas', icon: History },
-                  { id: 'supabase', label: 'Server Supabase', icon: Server, iconColor: 'text-emerald-400' },
-                  { id: 'maintenance', label: 'Kontrol Maintenance', icon: Wrench, iconColor: 'text-amber-400' },
-                  { id: 'saran', label: 'Kritik & Saran', icon: MessageSquare, iconColor: 'text-pink-400' },
-                  { id: 'chat', label: 'Chat Masuk', icon: MessageSquare, iconColor: 'text-pink-400' },
-                  { id: 'settings', label: 'Pengaturan', icon: Sliders, iconColor: 'text-amber-400' },
-                ].map((item) => {
-                  const Icon = item.icon;
-                  const isActive = activeTab === item.id;
-                  return (
-                    <button
-                      key={item.id}
-                      onClick={() => {
-                        setActiveTab(item.id as typeof activeTab);
-                        setMobileSidebarOpen(false);
-                      }}
-                      className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                        isActive
-                          ? item.id === 'supabase'
-                            ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 shadow-sm'
-                            : 'bg-pink-500/10 border-pink-500/30 text-pink-300 shadow-sm'
-                          : 'text-slate-300 hover:text-white hover:bg-[#161131] border-transparent'
-                      }`}
-                    >
-                      <Icon className={`w-4 h-4 transition-colors ${
-                        isActive 
-                          ? item.id === 'supabase' ? 'text-emerald-300' : 'text-pink-300'
-                          : item.iconColor || 'text-slate-400'
-                      }`} />
-                      <span>{item.label}</span>
-                    </button>
-                  );
-                })}
+              {/* Mobile navigation links organized into sub-menus */}
+              <div className="space-y-4">
+                {ownerMenuGroups.map((group, gIdx) => (
+                  <div key={gIdx} className="space-y-1">
+                    <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-2 block">
+                      {group.title}
+                    </span>
+                    <div className="space-y-1">
+                      {group.items.map((item) => {
+                        const Icon = item.icon;
+                        const isActive = activeTab === item.id;
+                        return (
+                          <button
+                            key={item.id}
+                            onClick={() => {
+                              setActiveTab(item.id as typeof activeTab);
+                              setMobileSidebarOpen(false);
+                            }}
+                            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                              isActive
+                                ? item.id === 'supabase'
+                                  ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 shadow-sm'
+                                  : 'bg-pink-500/10 border-pink-500/30 text-pink-300 shadow-sm'
+                                : 'text-slate-300 hover:text-white hover:bg-[#161131] border-transparent'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5">
+                              <Icon className={`w-4 h-4 transition-colors ${
+                                isActive 
+                                  ? item.id === 'supabase' ? 'text-emerald-300' : 'text-pink-300'
+                                  : item.iconColor || 'text-slate-400'
+                              }`} />
+                              <span>{item.label}</span>
+                            </div>
+                            {item.badge && item.badge > 0 ? (
+                              <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                                {item.badge}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
@@ -652,57 +744,54 @@ export const OwnerPanel: React.FC = () => {
               <h4 className="text-xs font-bold text-white truncate">
                 {currentUser?.name || 'OWNER REMINDTASK'}
               </h4>
-              <p className="text-[10px] text-slate-400 truncate">
-                {currentUser?.email || 'owner@remindtask.com'}
+              <p className="text-[10px] text-pink-400 font-mono truncate">
+                Owner Administrator
               </p>
             </div>
           </div>
 
-          {/* MAIN MENU */}
-          <div className="space-y-1">
-            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 mb-2 block">
-              MAIN MENU
-            </span>
-            {[
-              { id: 'dashboard', label: 'Dashboard', icon: Activity },
-              { id: 'admins', label: 'User Admin', icon: Shield },
-              { id: 'kelas', label: 'Kelas', icon: Building2 },
-              { id: 'tugas', label: 'Semua Tugas', icon: ListTodo },
-              { id: 'absensi', label: 'Rekap Absensi Semua Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
-              { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle, iconColor: 'text-purple-400' },
-              { id: 'anonwall', label: 'Pesan Anonim Kelas', icon: MessageSquareDashed },
-              { id: 'statistik', label: 'Statistik', icon: TrendingUp },
-              { id: 'kalender', label: 'Kalender Tugas', icon: Calendar },
-              { id: 'aktivitas', label: 'Log Aktivitas', icon: History },
-              { id: 'supabase', label: 'Server Supabase', icon: Server, iconColor: 'text-emerald-400' },
-              { id: 'maintenance', label: 'Kontrol Maintenance', icon: Wrench, iconColor: 'text-amber-400' },
-              { id: 'saran', label: 'Kritik & Saran', icon: MessageSquare, iconColor: 'text-pink-400' },
-              { id: 'chat', label: 'Chat Masuk', icon: MessageSquare, iconColor: 'text-pink-400' },
-              { id: 'settings', label: 'Pengaturan', icon: Sliders, iconColor: 'text-amber-400' },
-            ].map((item) => {
-              const Icon = item.icon;
-              const isActive = activeTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id as typeof activeTab)}
-                  className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
-                    isActive
-                      ? item.id === 'supabase'
-                        ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 shadow-sm'
-                        : 'bg-pink-500/10 border-pink-500/30 text-pink-300 shadow-sm'
-                      : 'text-slate-400 hover:text-white hover:bg-[#161131] border-transparent'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 transition-colors ${
-                    isActive 
-                      ? item.id === 'supabase' ? 'text-emerald-300' : 'text-pink-300'
-                      : item.iconColor || 'text-slate-400'
-                  }`} />
-                  <span>{item.label}</span>
-                </button>
-              );
-            })}
+          {/* MAIN MENU ORGANIZED INTO CATEGORIES & SUB-MENUS */}
+          <div className="space-y-4">
+            {ownerMenuGroups.map((group, gIdx) => (
+              <div key={gIdx} className="space-y-1">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider px-3 block">
+                  {group.title}
+                </span>
+                <div className="space-y-1">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setActiveTab(item.id as typeof activeTab)}
+                        className={`w-full flex items-center justify-between px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                          isActive
+                            ? item.id === 'supabase'
+                              ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300 shadow-sm'
+                              : 'bg-pink-500/10 border-pink-500/30 text-pink-300 shadow-sm'
+                            : 'text-slate-400 hover:text-white hover:bg-[#161131] border-transparent'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Icon className={`w-4 h-4 transition-colors ${
+                            isActive 
+                              ? item.id === 'supabase' ? 'text-emerald-300' : 'text-pink-300'
+                              : item.iconColor || 'text-slate-400'
+                          }`} />
+                          <span>{item.label}</span>
+                        </div>
+                        {item.badge && item.badge > 0 ? (
+                          <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                            {item.badge}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -719,7 +808,7 @@ export const OwnerPanel: React.FC = () => {
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      <main className="flex-1 flex flex-col min-w-0 md:overflow-y-auto">
         {/* Top Header Bar */}
         <header className="px-6 py-4 border-b border-[#201a3b] bg-[#110e22]/60 backdrop-blur-md flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20">
           <div>
@@ -777,6 +866,44 @@ export const OwnerPanel: React.FC = () => {
             </button>
           </div>
         </header>
+
+        {/* SECONDARY SUB-MENU BAR (Desktop & Tablet Quick Navigation) */}
+        <div className="bg-[#110e25]/90 border-b border-[#231b42] backdrop-blur-md px-6 py-2 sticky top-[73px] z-10 flex items-center justify-between gap-3 overflow-x-auto scrollbar-none shadow-xs">
+          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none">
+            {ownerMenuGroups.map((group, idx) => (
+              <div key={idx} className="flex items-center gap-1.5 shrink-0 pr-3 border-r border-[#261d47] last:border-r-0">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider hidden xl:inline">
+                  {group.title}:
+                </span>
+                <div className="flex items-center gap-1">
+                  {group.items.map((item) => {
+                    const Icon = item.icon;
+                    const isActive = activeTab === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        onClick={() => setActiveTab(item.id)}
+                        className={`px-2.5 py-1 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap ${
+                          isActive
+                            ? 'bg-gradient-to-r from-pink-500/20 to-purple-600/20 border border-pink-500/40 text-pink-300 font-black shadow-xs'
+                            : 'text-slate-400 hover:text-white hover:bg-[#1c153a] border border-transparent'
+                        }`}
+                      >
+                        <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-pink-400' : item.iconColor || 'text-slate-400'}`} />
+                        <span>{item.label}</span>
+                        {item.badge !== undefined && item.badge > 0 && (
+                          <span className="w-4 h-4 rounded-full bg-pink-500 text-white font-mono text-[9px] font-bold flex items-center justify-center">
+                            {item.badge}
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
 
         {/* View Content */}
         <div className="p-6 space-y-6 flex-1">
@@ -934,6 +1061,197 @@ export const OwnerPanel: React.FC = () => {
                 </div>
               </div>
 
+              {/* KATEGORI & SUB-MENU OWNER (Navigasi Terstruktur seperti Member & Admin) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-black text-white flex items-center gap-2">
+                      <Sparkles className="w-5 h-5 text-pink-400" />
+                      <span>Kategori &amp; Sub-Menu Owner</span>
+                    </h3>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Pusat navigasi terstruktur untuk mengakses seluruh modul akademik, komunikasi, server, dan pengaturan.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  {/* Kategori 1: Akademik & Kelas */}
+                  <div className="p-5 rounded-3xl bg-gradient-to-br from-[#1d143c] via-[#161033] to-[#100d24] border border-purple-500/35 hover:border-pink-500/60 transition-all shadow-lg flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md">
+                          <BookOpen className="w-5 h-5" />
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 text-[10px] font-bold border border-purple-500/30">
+                          8 Modul
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-sm text-white">Akademik &amp; Kelas</h4>
+                      <p className="text-[11px] text-slate-400 mt-1 mb-3">
+                        Kelola data guru admin, ruang kelas siswa, distribusi tugas, absensi, dan bank soal.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-purple-500/20">
+                      <button
+                        onClick={() => setActiveTab('admins')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        🛡️ User Admin
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('kelas')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        🏫 Ruang Kelas
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('tugas')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📝 Semua Tugas
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('absensi')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📋 Absensi
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('bank_soal')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        💡 Bank Soal
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('statistik')}
+                        className="px-2 py-1.5 rounded-xl bg-[#140e2b] hover:bg-purple-600/30 text-purple-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📊 Statistik
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Kategori 2: Komunikasi & Forum */}
+                  <div className="p-5 rounded-3xl bg-gradient-to-br from-[#251336] via-[#1c0f2b] to-[#120b1e] border border-pink-500/35 hover:border-pink-400/60 transition-all shadow-lg flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 text-white flex items-center justify-center shadow-md">
+                          <Globe className="w-5 h-5" />
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-pink-500/20 text-pink-300 text-[10px] font-bold border border-pink-500/30">
+                          4 Modul
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-sm text-white">Komunikasi &amp; Forum</h4>
+                      <p className="text-[11px] text-slate-400 mt-1 mb-3">
+                        Interaksi sosial siswa, forum jasa, pesan anonim, live chat, dan saran.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-1.5 pt-2 border-t border-pink-500/20">
+                      <button
+                        onClick={() => setActiveTab('forum')}
+                        className="px-2 py-1.5 rounded-xl bg-[#1a0f26] hover:bg-pink-600/30 text-pink-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        🌐 Forum &amp; Jasa
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('anonwall')}
+                        className="px-2 py-1.5 rounded-xl bg-[#1a0f26] hover:bg-pink-600/30 text-pink-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        💬 Pesan Anonim
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('chat')}
+                        className="px-2 py-1.5 rounded-xl bg-[#1a0f26] hover:bg-pink-600/30 text-pink-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        ✉️ Chat Masuk
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('saran')}
+                        className="px-2 py-1.5 rounded-xl bg-[#1a0f26] hover:bg-pink-600/30 text-pink-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📢 Kritik Saran
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Kategori 3: Sistem & Server */}
+                  <div className="p-5 rounded-3xl bg-gradient-to-br from-[#102422] via-[#0d1c1a] to-[#081211] border border-emerald-500/35 hover:border-emerald-400/60 transition-all shadow-lg flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-600 text-white flex items-center justify-center shadow-md">
+                          <Server className="w-5 h-5" />
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                          Infrastruktur
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-sm text-white">Sistem &amp; Server</h4>
+                      <p className="text-[11px] text-slate-400 mt-1 mb-3">
+                        Koneksi database Supabase, audit log aktivitas sistem, dan mode pemeliharaan.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-emerald-500/20">
+                      <button
+                        onClick={() => setActiveTab('aktivitas')}
+                        className="w-full px-2 py-1.5 rounded-xl bg-[#0a1816] hover:bg-emerald-600/30 text-emerald-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📜 Log Aktivitas Sistem
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('supabase')}
+                        className="w-full px-2 py-1.5 rounded-xl bg-[#0a1816] hover:bg-emerald-600/30 text-emerald-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        ⚡ Server Supabase PostgreSQL
+                      </button>
+                      <button
+                        onClick={() => setActiveTab('maintenance')}
+                        className="w-full px-2 py-1.5 rounded-xl bg-[#0a1816] hover:bg-emerald-600/30 text-emerald-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        🔧 Kontrol Mode Maintenance
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Kategori 4: Pengaturan & Profil */}
+                  <div className="p-5 rounded-3xl bg-gradient-to-br from-[#291e12] via-[#1f170e] to-[#140e09] border border-amber-500/35 hover:border-amber-400/60 transition-all shadow-lg flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 text-slate-950 flex items-center justify-center shadow-md">
+                          <Sliders className="w-5 h-5" />
+                        </div>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold border border-amber-500/30">
+                          Konfigurasi
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-sm text-white">Pengaturan &amp; Akun</h4>
+                      <p className="text-[11px] text-slate-400 mt-1 mb-3">
+                        Kelola kredensial Owner, nama tampilan, dan keamanan sistem.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5 pt-2 border-t border-amber-500/20">
+                      <button
+                        onClick={() => setActiveTab('settings')}
+                        className="w-full px-2 py-1.5 rounded-xl bg-[#1c130b] hover:bg-amber-600/30 text-amber-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        ⚙️ Pengaturan Profil Owner
+                      </button>
+                      <button
+                        onClick={() => setIsBroadcastModalOpen(true)}
+                        className="w-full px-2 py-1.5 rounded-xl bg-[#1c130b] hover:bg-amber-600/30 text-amber-200 text-[10px] font-bold text-left transition-colors cursor-pointer truncate"
+                      >
+                        📢 Kirim Broadcast Pengumuman
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Quick Actions & Recent Platform Activity */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 {/* All Classes Summary */}
@@ -1044,7 +1362,7 @@ export const OwnerPanel: React.FC = () => {
                   <thead>
                     <tr className="border-b border-[#261f44] text-slate-400">
                       <th className="pb-3 font-semibold">Nama Admin</th>
-                      <th className="pb-3 font-semibold">Email Login</th>
+                      <th className="pb-3 font-semibold">Username Admin</th>
                       <th className="pb-3 font-semibold">Password</th>
                       <th className="pb-3 font-semibold">Kelas & Kode</th>
                       <th className="pb-3 font-semibold">Status Akun</th>
@@ -1076,9 +1394,6 @@ export const OwnerPanel: React.FC = () => {
                             </td>
                             <td className="py-3.5 font-mono text-slate-300">
                               <span className="text-pink-400 font-semibold block">@{admin.username || (admin.email ? admin.email.split('@')[0] : admin.name.toLowerCase().replace(/\s+/g, ''))}</span>
-                              {admin.email && !admin.email.endsWith('.local') && (
-                                <span className="text-[10px] text-slate-500 font-sans block">{admin.email}</span>
-                              )}
                             </td>
                             <td className="py-3.5">
                               <div className="flex items-center gap-1.5 font-mono text-slate-300">
@@ -1324,6 +1639,11 @@ export const OwnerPanel: React.FC = () => {
                 )}
               </div>
             </div>
+          )}
+
+          {/* TAB: FORUM KELAS & GLOBAL + MARKETPLACE */}
+          {activeTab === 'forum' && (
+            <ForumView />
           )}
 
           {/* TAB: REKAP ABSENSI KELAS (INTEGRASI OWNER) */}
@@ -1855,7 +2175,7 @@ export const OwnerPanel: React.FC = () => {
               <div>
                 <h3 className="text-lg font-extrabold text-white">Pengaturan Profil Owner</h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Kelola nama lengkap, email koordinasi, dan password keamanan Owner platform.
+                  Kelola nama lengkap dan password keamanan Owner platform.
                 </p>
               </div>
 
@@ -1869,20 +2189,6 @@ export const OwnerPanel: React.FC = () => {
                     required
                     className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-4 py-2.5 text-white outline-none focus:border-pink-500"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-bold mb-1.5">Alamat Email Owner (Koordinasi Notifikasi)</label>
-                  <input
-                    type="email"
-                    value={ownerEmail}
-                    onChange={(e) => setOwnerEmail(e.target.value)}
-                    required
-                    className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-4 py-2.5 text-white outline-none focus:border-pink-500"
-                  />
-                  <p className="text-[10px] text-pink-400 mt-1.5 leading-relaxed font-medium">
-                    💡 <strong>Catatan Penting:</strong> Email ini digunakan sebagai tujuan otomatis untuk seluruh notifikasi sistem (registrasi admin baru, unggahan bukti tugas member, pengiriman pesan, kritik &amp; saran). Jika email diganti, pengiriman notifikasi akan langsung berpindah ke email baru secara otomatis.
-                  </p>
                 </div>
 
                 <div>
@@ -1964,17 +2270,6 @@ export const OwnerPanel: React.FC = () => {
                   type="text"
                   value={editAdminName}
                   onChange={(e) => setEditAdminName(e.target.value)}
-                  required
-                  className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-white outline-none focus:border-pink-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Email Login</label>
-                <input
-                  type="email"
-                  value={editAdminEmail}
-                  onChange={(e) => setEditAdminEmail(e.target.value)}
                   required
                   className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-white outline-none focus:border-pink-500"
                 />
@@ -2075,17 +2370,6 @@ export const OwnerPanel: React.FC = () => {
                   value={newAdminName}
                   onChange={(e) => setNewAdminName(e.target.value)}
                   placeholder="Masukkan nama admin"
-                  required
-                  className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-xs text-white outline-none focus:border-pink-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Email Login Admin</label>
-                <input
-                  type="email"
-                  value={newAdminEmail}
-                  onChange={(e) => setNewAdminEmail(e.target.value)}
-                  placeholder="admin@email.com"
                   required
                   className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-xs text-white outline-none focus:border-pink-500"
                 />
@@ -2200,7 +2484,7 @@ export const OwnerPanel: React.FC = () => {
             </div>
             <h3 className="text-base font-bold text-white text-center mb-1">Hapus Akun Admin?</h3>
             <p className="text-xs text-slate-300 text-center mb-4">
-              Yakin ingin menghapus admin <strong className="text-white font-semibold">{adminToDelete.name}</strong> ({adminToDelete.email})? Akun dan akses kelas terkait akan dihapus secara terintegrasi.
+              Yakin ingin menghapus admin <strong className="text-white font-semibold">{adminToDelete.name}</strong>? Akun dan akses kelas terkait akan dihapus secara terintegrasi.
             </p>
             <div className="flex items-center gap-2">
               <button

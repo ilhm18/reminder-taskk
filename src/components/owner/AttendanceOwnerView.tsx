@@ -47,8 +47,7 @@ export const AttendanceOwnerView: React.FC = () => {
       const matchClass = selectedClassId === 'all' || r.classId === selectedClassId;
       const matchSearch =
         !searchQuery ||
-        r.studentName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (r.studentEmail && r.studentEmail.toLowerCase().includes(searchQuery.toLowerCase()));
+        r.studentName.toLowerCase().includes(searchQuery.toLowerCase());
       return matchClass && matchSearch;
     });
   }, [attendanceRecords, selectedClassId, searchQuery]);
@@ -318,9 +317,6 @@ export const AttendanceOwnerView: React.FC = () => {
                     <tr key={rec.id} className="hover:bg-[#181335]/50 transition-colors">
                       <td className="p-3.5 pl-5 font-bold text-white">
                         {rec.studentName}
-                        <span className="text-[10px] text-slate-400 font-mono block">
-                          {rec.studentEmail || '-'}
-                        </span>
                       </td>
 
                       <td className="p-3.5 text-purple-300 font-bold">

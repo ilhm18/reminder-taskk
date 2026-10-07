@@ -7,12 +7,7 @@ interface BroadcastModalProps {
   onClose: () => void;
 }
 
-const BROADCAST_TEMPLATES = [
-  {
-    label: '🛠️ Pemeliharaan (Maintenance)',
-    title: 'Pemberitahuan Pemeliharaan Sistem & Server',
-    message: 'Halo seluruh warga kelas! Platform RemindTask akan menjalani pemeliharaan sistem (maintenance) server untuk peningkatan performa. Mohon bersabar, layanan akan kembali normal setelah proses selesai.',
-  },
+const ADMIN_BROADCAST_TEMPLATES = [
   {
     label: '⏰ Deadline Tugas',
     title: 'Pengingat Deadline Tugas Penting',
@@ -34,9 +29,27 @@ const BROADCAST_TEMPLATES = [
     message: 'Tugas kelompok telah dirilis beserta pembagian anggotanya. Mohon segera berkoordinasi dengan rekan sekelompok masing-masing untuk mulai berdiskusi.',
   },
   {
+    label: '📢 Pengumuman Umum',
+    title: 'Pengumuman Penting Kelas',
+    message: 'Diharapkan perhatian dari seluruh anggota kelas untuk membaca dan memahami informasi kegiatan kelas yang akan berlangsung dalam waktu dekat.',
+  },
+];
+
+const OWNER_BROADCAST_TEMPLATES = [
+  {
+    label: '🛠️ Pemeliharaan Server',
+    title: 'Pemberitahuan Pemeliharaan Sistem (Maintenance)',
+    message: 'Perhatian seluruh pengguna RemindTask, sistem akan menjalani pemeliharaan server dan peningkatan infrastruktur database. Mohon simpan pekerjaan Anda sebelum waktu pemeliharaan dimulai.',
+  },
+  {
+    label: '🚀 Pembaruan Sistem',
+    title: 'Rilis Pembaruan Fitur Baru RemindTask',
+    message: 'Kabar gembira! Platform RemindTask baru saja diperbarui dengan fitur-fitur mutakhir untuk mendukung kenyamanan belajar dan pengelolaan kelas Anda.',
+  },
+  {
     label: '⚠️ Pengumuman Darurat',
-    title: 'Pengumuman Penting & Mendesak',
-    message: 'Mohon perhatian seluruh anggota kelas untuk segera membaca pengumuman ini. Harap segera konfirmasi respon atau kehadiran sesuai arahan admin.',
+    title: 'Pengumuman Penting & Mendesak dari Owner',
+    message: 'Mohon perhatian seluruh admin dan pengguna RemindTask untuk segera membaca pengumuman penting ini dan mematuhi arahan teknis dari pengelola platform.',
   },
 ];
 
@@ -137,8 +150,8 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="w-full max-w-lg bg-[#141126] border border-[#2e2652] rounded-3xl p-6 shadow-2xl relative overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/75 backdrop-blur-xs animate-in fade-in duration-200">
+      <div className="w-full max-w-lg bg-[#141126] border border-[#2e2652] rounded-3xl p-5 sm:p-6 shadow-2xl relative max-h-[90vh] overflow-y-auto">
         {/* Glow accent */}
         <div className="absolute top-0 right-0 w-64 h-64 bg-pink-500/10 rounded-full blur-3xl pointer-events-none -mr-20 -mt-20" />
 
@@ -287,7 +300,7 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
               <span>Gunakan Template Cepat:</span>
             </label>
             <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 no-scrollbar">
-              {BROADCAST_TEMPLATES.map((tmpl, idx) => (
+              {(currentRole === 'owner' ? OWNER_BROADCAST_TEMPLATES : ADMIN_BROADCAST_TEMPLATES).map((tmpl, idx) => (
                 <button
                   key={idx}
                   type="button"

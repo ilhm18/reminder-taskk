@@ -22,6 +22,7 @@ import {
   FileDown,
   FileSpreadsheet,
   FileText,
+  Globe,
   Heart,
   HelpCircle,
   Image as ImageIcon,
@@ -73,6 +74,7 @@ import { AnonymousWallAdminView } from './AnonymousWallAdminView';
 import { AdminMemberChatView } from './AdminMemberChatView';
 import { QuestionBankAdminView } from './QuestionBankAdminView';
 import { AttendanceAdminView } from './AttendanceAdminView';
+import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { formatIndonesianDate, getTaskDeadlineStatus, playNotificationSound } from '../../utils/notification';
@@ -102,7 +104,35 @@ export const AdminPanel: React.FC = () => {
     users,
     deleteMemberUser,
     questionBanks,
+    moderateSubmission,
+    forumPosts,
   } = useApp();
+
+  const [preservedScrollPos, setPreservedScrollPos] = useState<number | null>(null);
+
+  const handleQuickApproveSubmission = (e: React.MouseEvent, submissionId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const currentScroll =
+      window.scrollY ||
+      document.documentElement.scrollTop ||
+      document.querySelector('main')?.scrollTop ||
+      0;
+    setPreservedScrollPos(currentScroll);
+
+    moderateSubmission(submissionId, 'completed', 'Disetujui langsung oleh Pengajar/Admin.');
+    playNotificationSound('success');
+    showToast('Tugas siswa berhasil disetujui (Approved)!', 'success');
+
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: currentScroll, behavior: 'instant' });
+      const mainEl = document.querySelector('main');
+      if (mainEl && currentScroll > 0) {
+        mainEl.scrollTop = currentScroll;
+      }
+    });
+  };
 
   type AdminTab =
     | 'dashboard'
@@ -111,6 +141,7 @@ export const AdminPanel: React.FC = () => {
     | 'absensi'
     | 'bank_soal'
     | 'jadwal'
+    | 'forum'
     | 'spin'
     | 'anonwall'
     | 'moderasi'
@@ -161,6 +192,12 @@ export const AdminPanel: React.FC = () => {
         'bank-soal': 'bank_soal',
         jadwal: 'jadwal',
         schedule: 'jadwal',
+        forum: 'forum',
+        'forum-kelas': 'forum',
+        'forum-global': 'forum',
+        jasa: 'forum',
+        market: 'forum',
+        marketplace: 'forum',
         spin: 'spin',
         wheel: 'spin',
         'spin-wheel': 'spin',
@@ -205,6 +242,35 @@ export const AdminPanel: React.FC = () => {
   };
 
   const [activeTab, setActiveTab] = useState<AdminTab>(getAdminTabFromUrl);
+
+  // Track unread/new forum posts
+  const [lastViewedForumTime, setLastViewedForumTime] = useState<number>(() => {
+    try {
+      return parseInt(localStorage.getItem('rt_last_viewed_forum_' + (currentUser?.id || 'admin')) || '0', 10);
+    } catch {
+      return 0;
+    }
+  });
+
+  const hasUnreadForum = useMemo(() => {
+    if (!forumPosts || forumPosts.length === 0) return false;
+    return forumPosts.some((p) => {
+      const isForClass = p.scope === 'global' || p.classId === currentClass?.id;
+      const isNew = new Date(p.createdAt).getTime() > lastViewedForumTime;
+      const isNotMe = p.authorId !== currentUser?.id;
+      return isForClass && isNew && isNotMe;
+    });
+  }, [forumPosts, lastViewedForumTime, currentClass, currentUser]);
+
+  useEffect(() => {
+    if (activeTab === 'forum') {
+      const now = Date.now();
+      setLastViewedForumTime(now);
+      try {
+        localStorage.setItem('rt_last_viewed_forum_' + (currentUser?.id || 'admin'), now.toString());
+      } catch {}
+    }
+  }, [activeTab, currentUser?.id]);
 
   useEffect(() => {
     try {
@@ -293,7 +359,7 @@ export const AdminPanel: React.FC = () => {
     const q = accessLogSearch.trim().toLowerCase();
     if (!q) return currentClassLogs;
     return currentClassLogs.filter(
-      (l) => l.studentName.toLowerCase().includes(q) || l.studentEmail.toLowerCase().includes(q)
+      (l) => l.studentName.toLowerCase().includes(q)
     );
   }, [currentClassLogs, accessLogSearch]);
 
@@ -377,12 +443,7 @@ export const AdminPanel: React.FC = () => {
         { id: 'kelas', label: 'Ruang Kelas', icon: Layers },
         { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen },
         { id: 'absensi', label: 'Absensi Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
-        {
-          id: 'bank_soal',
-          label: 'Bank Soal & Ujian',
-          icon: HelpCircle,
-          badge: questionBanks.filter((qb) => qb.classId === currentClass?.id && qb.status === 'hidden').length || undefined,
-        },
+        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle },
         { id: 'jadwal', label: 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
         { id: 'kalender', label: 'Kalender', icon: Calendar },
         { id: 'statistik', label: 'Statistik Kelas', icon: BarChart3 },
@@ -391,6 +452,7 @@ export const AdminPanel: React.FC = () => {
     {
       title: 'Aktivitas & Interaksi',
       items: [
+        { id: 'forum', label: 'Forum & Jasa', icon: Globe, iconColor: 'text-pink-400', badge: hasUnreadForum ? 1 : undefined },
         { id: 'spin', label: 'Roda Spin & Kelompok', icon: Dice5, iconColor: 'text-purple-400' },
         { id: 'anonwall', label: 'Pesan Anonim', icon: MessageSquareDashed, iconColor: 'text-amber-400' },
       ],
@@ -398,8 +460,8 @@ export const AdminPanel: React.FC = () => {
     {
       title: 'Komunikasi & Moderasi',
       items: [
-        { id: 'moderasi', label: 'Pemeriksaan Tugas', icon: FileCheck2, badge: pendingModeration.length },
-        { id: 'chat_siswa', label: 'Chat Siswa', icon: MessageSquare, badge: unreadMemberChatsCount, iconColor: 'text-pink-400' },
+        { id: 'moderasi', label: 'Pemeriksaan Tugas', icon: FileCheck2, badge: pendingModeration.length || undefined },
+        { id: 'chat_siswa', label: 'Chat Siswa', icon: MessageSquare, badge: unreadMemberChatsCount || undefined, iconColor: 'text-pink-400' },
         { id: 'chat_owner', label: 'Chat Owner', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
         { id: 'saran', label: 'Kritik & Saran', icon: MessageSquarePlus, iconColor: 'text-pink-400' },
       ],
@@ -735,7 +797,7 @@ export const AdminPanel: React.FC = () => {
       </aside>
 
       {/* MAIN CONTENT AREA */}
-      <main className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      <main className="flex-1 flex flex-col min-w-0 md:overflow-y-auto">
         {/* Header Bar */}
         <header className="px-6 py-4 border-b border-[#201a3b] bg-[#110e22]/60 backdrop-blur-md flex flex-wrap items-center justify-between gap-4 sticky top-0 z-20">
           <div>
@@ -1078,16 +1140,16 @@ export const AdminPanel: React.FC = () => {
                 </div>
               </div>
 
-              {/* DAFTAR & RIWAYAT PENGAKSES KODE KELAS (DENGAN EMAIL SISWA) */}
+              {/* DAFTAR & RIWAYAT PENGAKSES KODE KELAS */}
               <div className="p-6 rounded-3xl bg-[#141126] border border-[#272144] shadow-xl space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#231d3e]">
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <Key className="w-5 h-5 text-pink-400" />
-                      <h3 className="text-lg font-extrabold text-white">Daftar & Riwayat Pengakses Kode Kelas</h3>
+                      <h3 className="text-lg font-extrabold text-white">Daftar &amp; Riwayat Pengakses Kode Kelas</h3>
                     </div>
                     <p className="text-xs text-slate-400">
-                      Pantau siapa saja siswa yang memasukkan kode kelas <span className="font-mono text-pink-300 font-bold">({currentClass?.code})</span> beserta alamat email dan waktu akses secara realtime.
+                      Pantau siapa saja siswa yang memasukkan kode kelas <span className="font-mono text-pink-300 font-bold">({currentClass?.code})</span> beserta waktu akses secara realtime.
                     </p>
                   </div>
 
@@ -1105,7 +1167,7 @@ export const AdminPanel: React.FC = () => {
                     type="text"
                     value={accessLogSearch}
                     onChange={(e) => setAccessLogSearch(e.target.value)}
-                    placeholder="Cari berdasarkan nama siswa atau email..."
+                    placeholder="Cari berdasarkan nama siswa..."
                     className="w-full bg-[#0f0c1f] border border-[#271e42] rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder:text-slate-500 outline-none focus:border-pink-500 transition-colors font-medium"
                   />
                 </div>
@@ -1121,7 +1183,6 @@ export const AdminPanel: React.FC = () => {
                       <thead>
                         <tr className="border-b border-[#241c42] text-slate-400">
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Nama Siswa</th>
-                          <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Email Siswa</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Kode Kelas</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Waktu Akses</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Perangkat</th>
@@ -1139,12 +1200,6 @@ export const AdminPanel: React.FC = () => {
                                 <span className="truncate max-w-[150px] sm:max-w-xs">{log.studentName}</span>
                               </div>
                             </td>
-                            <td className="py-3.5 font-mono text-slate-300">
-                              <div className="flex items-center gap-1.5">
-                                <Mail className="w-3.5 h-3.5 text-pink-400 shrink-0" />
-                                <span className="text-xs truncate max-w-[200px]">{log.studentEmail}</span>
-                              </div>
-                            </td>
                             <td className="py-3.5 font-mono font-bold text-pink-400">
                               {log.classCode}
                             </td>
@@ -1157,18 +1212,6 @@ export const AdminPanel: React.FC = () => {
                               </span>
                             </td>
                             <td className="py-3.5 text-right flex items-center justify-end gap-1.5 flex-wrap">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(log.studentEmail);
-                                  showToast(`Email ${log.studentEmail} berhasil disalin!`, 'success');
-                                }}
-                                className="px-2 py-1 rounded-lg bg-[#241a45] hover:bg-[#32245e] text-pink-300 hover:text-white text-[10px] font-bold border border-[#392866] transition-colors inline-flex items-center gap-1 cursor-pointer"
-                                title="Salin Email Siswa"
-                              >
-                                <Copy className="w-2.5 h-2.5" />
-                                <span>Salin</span>
-                              </button>
                               <button
                                 type="button"
                                 onClick={async (e) => {
@@ -1719,6 +1762,11 @@ export const AdminPanel: React.FC = () => {
             <ScheduleManagementView />
           )}
 
+          {/* TAB: FORUM KELAS & GLOBAL + MARKETPLACE */}
+          {activeTab === 'forum' && (
+            <ForumView />
+          )}
+
           {/* TAB: RODA SPIN & ACAK KELOMPOK */}
           {activeTab === 'spin' && (
             <SpinWheelView />
@@ -1829,6 +1877,17 @@ export const AdminPanel: React.FC = () => {
                             </td>
                             <td className="py-3.5 text-right">
                               <div className="flex items-center justify-end gap-1.5">
+                                {sub.status !== 'completed' && (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => handleQuickApproveSubmission(e, sub.id)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 hover:text-white font-bold text-xs border border-emerald-500/35 transition-colors cursor-pointer flex items-center gap-1 shadow-sm"
+                                    title="Setujui (Approve) langsung tanpa membuka modal"
+                                  >
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                    <span className="hidden sm:inline">Setujui</span>
+                                  </button>
+                                )}
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -1891,10 +1950,10 @@ export const AdminPanel: React.FC = () => {
               <div className="p-6 rounded-3xl bg-[#141126] border border-[#272144]">
                 <h3 className="text-lg font-bold text-white mb-1 flex items-center gap-2">
                   <Settings className="w-5 h-5 text-pink-400" />
-                  <span>Pengaturan Profil Admin & Ruang Kelas</span>
+                  <span>Pengaturan Profil Admin &amp; Ruang Kelas</span>
                 </h3>
                 <p className="text-xs text-slate-400 mb-6">
-                  Kelola nama akun, email login, reset password, dan informasi kelas Anda
+                  Kelola nama akun, reset password, dan informasi kelas Anda
                 </p>
 
                 <form onSubmit={handleSaveSettings} className="space-y-4 max-w-xl text-xs">
@@ -1904,17 +1963,6 @@ export const AdminPanel: React.FC = () => {
                       type="text"
                       value={adminNameInput}
                       onChange={(e) => setAdminNameInput(e.target.value)}
-                      required
-                      className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-4 py-2.5 text-white outline-none focus:border-pink-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-slate-300 font-semibold mb-1.5">Email Login Admin</label>
-                    <input
-                      type="email"
-                      value={adminEmailInput}
-                      onChange={(e) => setAdminEmailInput(e.target.value)}
                       required
                       className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-4 py-2.5 text-white outline-none focus:border-pink-500"
                     />
