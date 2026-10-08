@@ -208,6 +208,7 @@ interface AppContextType {
   ) => Promise<{ success: boolean; message: string }>;
   updateAttendanceRecord: (recordId: string, status: AttendanceStatus, note?: string) => Promise<void>;
   deleteAttendanceRecord: (recordId: string) => Promise<void>;
+  refreshAttendance: (sessionId?: string) => Promise<void>;
 
   // Forum Kelas & Global
   forumPosts: ForumPost[];
@@ -5222,6 +5223,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Data presensi siswa dihapus.', 'info');
   };
 
+  const refreshAttendance = async (sessionId?: string) => {
+    const client = getSupabaseClient();
+    if (!client) return;
+    try {
+      let query = client.from('attendance_records').select('*').order('created_at', { ascending: false });
+      if (sessionId) {
+        query = query.eq('session_id', sessionId);
+      } else {
+        query = query.limit(200);
+      }
+      const res = await query;
+      if (Array.isArray(res.data)) {
+        const mapped: AttendanceRecord[] = res.data.map((r: any) => ({
+          id: r.id,
+          sessionId: r.session_id,
+          classId: r.class_id,
+          studentId: r.student_id,
+          studentName: r.student_name,
+          studentEmail: r.student_email || undefined,
+          status: r.status,
+          checkInTime: r.check_in_time || r.created_at,
+          deviceInfo: r.device_info || undefined,
+          verificationMethod: r.verification_method,
+          note: r.note || undefined,
+          proofFileUrl: r.proof_file_url || undefined,
+          proofFileName: r.proof_file_name || undefined,
+          locationVerified: r.location_verified ?? false,
+          createdAt: r.created_at || new Date().toISOString(),
+        }));
+        setAttendanceRecords((prev) => {
+          const map = new Map<string, AttendanceRecord>();
+          prev.forEach((r) => map.set(`${r.sessionId}-${r.studentId}`, r));
+          mapped.forEach((r) => map.set(`${r.sessionId}-${r.studentId}`, r));
+          return Array.from(map.values());
+        });
+      }
+
+      // Also refresh active sessions list
+      const sessRes = await client.from('attendance_sessions').select('*').order('created_at', { ascending: false }).limit(50);
+      if (Array.isArray(sessRes.data)) {
+        const mappedSessions: AttendanceSession[] = sessRes.data.map((s: any) => ({
+          id: s.id,
+          classId: s.class_id,
+          title: s.title,
+          subject: s.subject || '',
+          date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+          startTime: s.start_time || s.created_at,
+          endTime: s.end_time || undefined,
+          isActive: s.is_active ?? true,
+          secretToken: s.secret_token,
+          tokenRefreshInterval: s.token_refresh_interval || 15,
+          requireLocation: s.require_location ?? false,
+          latitude: s.latitude ? Number(s.latitude) : undefined,
+          longitude: s.longitude ? Number(s.longitude) : undefined,
+          radiusMeters: s.radius_meters ? Number(s.radius_meters) : 100,
+          createdBy: s.created_by,
+          createdByName: s.created_by_name || 'Admin',
+          createdAt: s.created_at || new Date().toISOString(),
+        }));
+        setAttendanceSessions(mappedSessions);
+      }
+    } catch (err) {
+      console.warn('refreshAttendance failed:', err);
+    }
+  };
+
   const toggleAttendanceSession = async (sessionId: string) => {
     const session = attendanceSessions.find((s) => s.id === sessionId);
     if (!session) return;
@@ -6846,6 +6913,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         recordAttendance,
         updateAttendanceRecord,
         deleteAttendanceRecord,
+        refreshAttendance,
         forumPosts,
         addForumPost,
         likeForumPost,

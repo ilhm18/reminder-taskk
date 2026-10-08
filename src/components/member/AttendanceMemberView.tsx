@@ -33,6 +33,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { AttendanceSession, AttendanceRecord, AttendanceStatus } from '../../types';
+import { getSupabaseClient } from '../../services/supabase';
 
 export const AttendanceMemberView: React.FC = () => {
   const {
@@ -41,6 +42,7 @@ export const AttendanceMemberView: React.FC = () => {
     attendanceSessions,
     attendanceRecords,
     recordAttendance,
+    refreshAttendance,
     syncWithSupabase,
     showToast,
   } = useApp();
@@ -64,6 +66,14 @@ export const AttendanceMemberView: React.FC = () => {
   const myRecordForActive = activeSession
     ? attendanceRecords.find((r) => r.sessionId === activeSession.id && r.studentId === currentUser?.id)
     : null;
+
+  useEffect(() => {
+    refreshAttendance();
+    const interval = setInterval(() => {
+      refreshAttendance();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [refreshAttendance]);
 
   // Scanner & Input State
   const [activeMode, setActiveMode] = useState<'camera' | 'code' | 'permission'>('camera');
@@ -352,28 +362,76 @@ export const AttendanceMemberView: React.FC = () => {
     // 1. Resolve session from scanned payload or activeSession
     let targetSession = activeSession;
     let extractedToken = scannedData;
+    let extractedSessionId = '';
 
     try {
       const trimmed = scannedData.trim();
       if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
         const parsed = JSON.parse(trimmed);
         const sid = parsed.sid || parsed.sessionId || parsed.id;
+        if (parsed.tok) {
+          extractedToken = parsed.tok;
+        }
         if (sid) {
+          extractedSessionId = sid;
           const found = attendanceSessions.find((s) => s.id === sid);
           if (found) targetSession = found;
         }
       } else if (trimmed.includes('sid=') || trimmed.includes('sessionId=')) {
         const match = trimmed.match(/(?:sid|sessionId)=([^&]+)/);
         if (match && match[1]) {
+          extractedSessionId = match[1];
           const found = attendanceSessions.find((s) => s.id === match[1]);
           if (found) targetSession = found;
+        }
+        const tokMatch = trimmed.match(/(?:tok|code|token)=([^&]+)/);
+        if (tokMatch && tokMatch[1]) {
+          extractedToken = tokMatch[1];
         }
       } else {
         // Direct string match with session ID or code
         const found = attendanceSessions.find((s) => s.id === trimmed || s.code === trimmed);
-        if (found) targetSession = found;
+        if (found) {
+          targetSession = found;
+        } else if (trimmed.startsWith('asess-')) {
+          extractedSessionId = trimmed;
+        }
       }
     } catch {}
+
+    // 1.5 Fetch session on the fly from Supabase if not found locally
+    if (!targetSession && extractedSessionId) {
+      try {
+        const client = getSupabaseClient();
+        if (client) {
+          const sessRes = await client.from('attendance_sessions').select('*').eq('id', extractedSessionId).maybeSingle();
+          if (sessRes.data) {
+            const s = sessRes.data;
+            targetSession = {
+              id: s.id,
+              classId: s.class_id,
+              title: s.title,
+              subject: s.subject || '',
+              date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+              startTime: s.start_time || s.created_at,
+              endTime: s.end_time || undefined,
+              isActive: s.is_active ?? true,
+              secretToken: s.secret_token,
+              tokenRefreshInterval: s.token_refresh_interval || 15,
+              requireLocation: s.require_location ?? false,
+              latitude: s.latitude ? Number(s.latitude) : undefined,
+              longitude: s.longitude ? Number(s.longitude) : undefined,
+              radiusMeters: s.radius_meters ? Number(s.radius_meters) : 100,
+              createdBy: s.created_by,
+              createdByName: s.created_by_name || 'Admin',
+              createdAt: s.created_at || new Date().toISOString(),
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('On-the-fly session fetch failed:', err);
+      }
+    }
 
     if (!targetSession) {
       targetSession = attendanceSessions.find((s) => s.isActive) || null;

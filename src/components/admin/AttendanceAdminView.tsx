@@ -52,6 +52,7 @@ export const AttendanceAdminView: React.FC = () => {
     recordAttendance,
     updateAttendanceRecord,
     deleteAttendanceRecord,
+    refreshAttendance,
     syncWithSupabase,
     showToast,
   } = useApp();
@@ -61,9 +62,11 @@ export const AttendanceAdminView: React.FC = () => {
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
 
-  // Filter sessions for current class
+  // Auto-polling attendance records & sessions every 3 seconds for reliable real-time updates
+  const targetSessionIdRef = useRef<string | null>(null);
   const targetClassId = currentClass?.id || currentUser?.classId || '';
   const [selectedProofRecord, setSelectedProofRecord] = useState<AttendanceRecord | null>(null);
+
   const classSessions = useMemo(() => {
     return attendanceSessions.filter((s) => {
       if (!targetClassId) return true;
@@ -81,6 +84,21 @@ export const AttendanceAdminView: React.FC = () => {
     const active = classSessions.find((s) => s.isActive);
     return active ? active.id : classSessions[0].id;
   }, [classSessions, selectedSessionId]);
+
+  useEffect(() => {
+    targetSessionIdRef.current = effectiveSessionId;
+  }, [effectiveSessionId]);
+
+  useEffect(() => {
+    // Initial fetch
+    refreshAttendance(effectiveSessionId || undefined);
+
+    const interval = setInterval(() => {
+      refreshAttendance(targetSessionIdRef.current || undefined);
+    }, 3000);
+
+    return () => clearInterval(interval);
+  }, [refreshAttendance]);
 
   useEffect(() => {
     if (effectiveSessionId !== selectedSessionId) {
@@ -864,7 +882,19 @@ export const AttendanceAdminView: React.FC = () => {
                         {terms.memberTitle} Yang Baru Saja Masuk ({currentRecords.length})
                       </span>
                     </div>
-                    <span className="text-[10px] text-slate-400 font-mono">Live Sync</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setIsSyncingAdmin(true);
+                        await refreshAttendance(effectiveSessionId || undefined);
+                        setIsSyncingAdmin(false);
+                        showToast('Data presensi berhasil disinkronkan!', 'success');
+                      }}
+                      className="p-1.5 px-2.5 rounded-lg bg-pink-500/10 hover:bg-pink-500/20 text-pink-300 border border-pink-500/30 text-[10px] font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${isSyncingAdmin ? 'animate-spin' : ''}`} />
+                      <span>Segarkan</span>
+                    </button>
                   </div>
 
                   {currentRecords.length === 0 ? (
@@ -1107,6 +1137,21 @@ export const AttendanceAdminView: React.FC = () => {
 
                     {/* CSV Download Buttons */}
                     <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setIsSyncingAdmin(true);
+                          await refreshAttendance(effectiveSessionId || undefined);
+                          setIsSyncingAdmin(false);
+                          showToast('Data presensi berhasil disinkronkan!', 'success');
+                        }}
+                        className="px-3 py-2 rounded-xl bg-pink-600/20 hover:bg-pink-600/30 border border-pink-500/40 text-pink-300 text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors shadow-sm"
+                        title="Tarik data presensi terbaru secara instan dari database"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 text-pink-400 ${isSyncingAdmin ? 'animate-spin' : ''}`} />
+                        <span>Segarkan</span>
+                      </button>
+
                       <button
                         type="button"
                         onClick={handleExportSessionCsv}
