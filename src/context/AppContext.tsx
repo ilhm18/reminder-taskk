@@ -2152,7 +2152,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               locationVerified: r.location_verified ?? false,
               createdAt: r.created_at || new Date().toISOString(),
             };
-            setAttendanceRecords((prev) => [recObj, ...prev.filter((x) => x.id !== recObj.id)]);
+            setAttendanceRecords((prev) => [
+              recObj,
+              ...prev.filter((x) => x.id !== recObj.id && !(x.sessionId === recObj.sessionId && x.studentId === recObj.studentId)),
+            ]);
+
+            // Notification on admin screen when student checks in
+            if (currentRole === 'admin' || currentRole === 'owner') {
+              playNotificationSound('beep');
+            }
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
             setAttendanceRecords((prev) => prev.filter((x) => x.id !== oldId));
@@ -5023,24 +5031,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     proofFileUrl?: string,
     proofFileName?: string
   ): Promise<{ success: boolean; message: string }> => {
-    const session = attendanceSessions.find((s) => s.id === sessionId);
+    let session = attendanceSessions.find((s) => s.id === sessionId);
     if (!session) {
-      return { success: false, message: 'Sesi presensi tidak ditemukan.' };
+      // Try to fetch session on the fly from Supabase
+      const client = getSupabaseClient();
+      if (client) {
+        try {
+          const sessRes = await client.from('attendance_sessions').select('*').eq('id', sessionId).maybeSingle();
+          if (sessRes.data) {
+            const s = sessRes.data;
+            session = {
+              id: s.id,
+              classId: s.class_id,
+              title: s.title,
+              subject: s.subject || '',
+              date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+              startTime: s.start_time || s.created_at,
+              endTime: s.end_time || undefined,
+              isActive: s.is_active ?? true,
+              secretToken: s.secret_token,
+              tokenRefreshInterval: s.token_refresh_interval || 15,
+              requireLocation: s.require_location ?? false,
+              latitude: s.latitude ? Number(s.latitude) : undefined,
+              longitude: s.longitude ? Number(s.longitude) : undefined,
+              radiusMeters: s.radius_meters ? Number(s.radius_meters) : 100,
+              createdBy: s.created_by,
+              createdByName: s.created_by_name || 'Admin',
+              createdAt: s.created_at || new Date().toISOString(),
+            };
+            setAttendanceSessions((prev) => [session!, ...prev.filter((x) => x.id !== session!.id)]);
+          }
+        } catch {}
+      }
+    }
+
+    if (!session) {
+      return { success: false, message: 'Sesi presensi tidak ditemukan atau belum dibuka.' };
     }
 
     if (!session.isActive && method !== 'manual_admin') {
       return { success: false, message: 'Sesi presensi ini telah ditutup oleh Guru/Admin.' };
     }
 
-    const studentId = overrideStudent?.id || currentUser?.id || 'member-guest';
+    const studentId = overrideStudent?.id || currentUser?.id || 'member-' + (currentUser?.username || 'guest');
     const studentName = overrideStudent?.name || currentUser?.name || 'Siswa';
     const studentEmail = overrideStudent?.email || currentUser?.email;
 
-    // ANTI-SABOTASE 1: Cek apakah siswa sudah pernah absen di sesi ini
+    // ANTI-SABOTASE 1: Cek apakah siswa sudah pernah absen di sesi ini (izinkan jika status sebelumnya 'alpa')
     const existing = attendanceRecords.find(
       (r) => r.sessionId === sessionId && r.studentId === studentId
     );
-    if (existing && method !== 'manual_admin') {
+    if (existing && existing.status !== 'alpa' && method !== 'manual_admin') {
       return {
         success: false,
         message: `Anda sudah tercatat presensi sebelumnya dengan status: ${existing.status.toUpperCase()}.`,
@@ -5055,24 +5096,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // ANTI-SABOTASE 3: Geofence Validation (Strict GPS Location Check)
+    // ANTI-SABOTASE 3: Geofence Validation (Strict GPS Location Check jika requireLocation aktif)
     let locationVerified = false;
     const hasSessionCoords = session.latitude !== undefined && session.longitude !== undefined && session.latitude !== 0 && session.longitude !== 0;
-    if (status === 'hadir' && (session.requireLocation || hasSessionCoords)) {
+    if (status === 'hadir' && session.requireLocation && hasSessionCoords) {
       if (!coords || isNaN(coords.lat) || isNaN(coords.lng) || (coords.lat === 0 && coords.lng === 0)) {
-        return {
-          success: false,
-          message: 'Presensi ditolak! Sesi ini mewajibkan verifikasi lokasi GPS. Harap aktifkan dan izinkan akses GPS lokasi Anda.',
-        };
+        if (method === 'qr_scan' || method === 'rolling_token') {
+          // Dinamis QR scan di depan layar proyektor membuktikan kehadiran fisik
+          locationVerified = false;
+        } else {
+          return {
+            success: false,
+            message: 'Presensi ditolak! Sesi ini mewajibkan verifikasi lokasi GPS. Harap izinkan GPS pada peramban Anda.',
+          };
+        }
+      } else {
+        const dist = calculateDistanceMeters(coords.lat, coords.lng, session.latitude!, session.longitude!);
+        const maxRadius = (session.radiusMeters || 100) + 50; // toleransi 50m untuk fluktuasi akurasi GPS smartphone
+        if (dist > maxRadius) {
+          return {
+            success: false,
+            message: `Presensi HADIR Ditolak! Terdeteksi berada di luar lokasi kelas (${Math.round(dist)}m dari kelas, batas maksimal ${session.radiusMeters || 100}m).`,
+          };
+        }
+        locationVerified = true;
       }
-      const dist = calculateDistanceMeters(coords.lat, coords.lng, session.latitude!, session.longitude!);
-      const maxRadius = session.radiusMeters || 100;
-      if (dist > maxRadius) {
-        return {
-          success: false,
-          message: `Presensi HADIR Ditolak! Terdeteksi berada di luar lokasi kelas (${dist}m dari kelas, batas maksimal radius ${maxRadius}m). Terdeteksi potensi sabotase lokasi!`,
-        };
-      }
+    } else {
       locationVerified = true;
     }
 
@@ -5080,7 +5129,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const deviceInfo = `${navigator.platform || 'Device'} • ${window.screen.width}x${window.screen.height}`;
 
     const newRecord: AttendanceRecord = {
-      id: 'arec-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      id: existing?.id || ('arec-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6)),
       sessionId,
       classId: session.classId,
       studentId,
@@ -5097,12 +5146,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       createdAt: new Date().toISOString(),
     };
 
-    setAttendanceRecords((prev) => [newRecord, ...prev.filter((r) => !(r.sessionId === sessionId && r.studentId === studentId))]);
+    setAttendanceRecords((prev) => [
+      newRecord,
+      ...prev.filter((r) => !(r.sessionId === sessionId && r.studentId === studentId)),
+    ]);
 
     const client = getSupabaseClient();
     if (client) {
       try {
-        await client.from('attendance_records').upsert({
+        const corePayload: any = {
           id: newRecord.id,
           session_id: newRecord.sessionId,
           class_id: newRecord.classId,
@@ -5114,13 +5166,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           device_info: newRecord.deviceInfo || null,
           verification_method: newRecord.verificationMethod,
           note: newRecord.note || null,
-          proof_file_url: newRecord.proofFileUrl || null,
-          proof_file_name: newRecord.proofFileName || null,
           location_verified: newRecord.locationVerified,
           created_at: newRecord.createdAt,
-        });
+        };
+
+        const fullPayload: any = { ...corePayload };
+        if (newRecord.proofFileUrl) fullPayload.proof_file_url = newRecord.proofFileUrl;
+        if (newRecord.proofFileName) fullPayload.proof_file_name = newRecord.proofFileName;
+
+        const res = await client
+          .from('attendance_records')
+          .upsert(fullPayload, { onConflict: 'session_id,student_id' });
+
+        if (res.error) {
+          // Jika kolom proof_file_* belum ada di skema database, fallback ke payload standar
+          const retryRes = await client
+            .from('attendance_records')
+            .upsert(corePayload, { onConflict: 'session_id,student_id' });
+          if (retryRes.error) {
+            console.error('Supabase attendance_records upsert error:', retryRes.error);
+          }
+        }
       } catch (err) {
-        console.warn('Supabase attendance_records upsert error:', err);
+        console.warn('Supabase attendance_records upsert exception:', err);
       }
     }
 

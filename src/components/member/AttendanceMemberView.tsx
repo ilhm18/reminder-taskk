@@ -26,6 +26,9 @@ import {
   HelpCircle,
   Info,
   X,
+  Barcode,
+  Keyboard,
+  RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
@@ -38,18 +41,24 @@ export const AttendanceMemberView: React.FC = () => {
     attendanceSessions,
     attendanceRecords,
     recordAttendance,
+    syncWithSupabase,
     showToast,
   } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
 
-  // Find active session for this member's class
+  // Find active session for this member's class (or any active session open currently)
   const targetClassId = currentClass?.id || currentUser?.classId || '';
-  const activeSession = attendanceSessions.find((s) => {
-    const isClassMatch = !targetClassId || s.classId === targetClassId || (currentClass?.code && s.classId === currentClass.code);
-    return isClassMatch && s.isActive;
-  });
+  const activeSession = React.useMemo(() => {
+    const classMatch = attendanceSessions.find((s) => {
+      const isClassMatch = !targetClassId || s.classId === targetClassId || (currentClass?.code && s.classId === currentClass.code);
+      return isClassMatch && s.isActive;
+    });
+    if (classMatch) return classMatch;
+    // Fallback: any currently active session in the database
+    return attendanceSessions.find((s) => s.isActive) || null;
+  }, [attendanceSessions, targetClassId, currentClass]);
 
   // Current member's record for the active session
   const myRecordForActive = activeSession
@@ -57,7 +66,10 @@ export const AttendanceMemberView: React.FC = () => {
     : null;
 
   // Scanner & Input State
-  const [activeMode, setActiveMode] = useState<'camera' | 'permission'>('camera');
+  const [activeMode, setActiveMode] = useState<'camera' | 'code' | 'permission'>('camera');
+  const [manualCode, setManualCode] = useState('');
+  const [isManualSubmitting, setIsManualSubmitting] = useState(false);
+  const [isRefreshingSessions, setIsRefreshingSessions] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<AttendanceStatus>('izin');
   const [permissionNote, setPermissionNote] = useState('');
   const [proofImageUrl, setProofImageUrl] = useState('');
@@ -267,7 +279,7 @@ export const AttendanceMemberView: React.FC = () => {
 
   // Switch camera on/off when mode changes
   useEffect(() => {
-    if (activeMode === 'camera' && !myRecordForActive && activeSession) {
+    if (activeMode === 'camera' && !myRecordForActive) {
       startCamera();
     } else {
       stopCamera();
@@ -275,7 +287,7 @@ export const AttendanceMemberView: React.FC = () => {
     return () => {
       stopCamera();
     };
-  }, [activeMode, myRecordForActive, activeSession]);
+  }, [activeMode, myRecordForActive]);
 
   // QR Scanning Loop using jsQR
   useEffect(() => {
@@ -312,7 +324,7 @@ export const AttendanceMemberView: React.FC = () => {
         inversionAttempts: 'attemptBoth',
       });
 
-      if (code && code.data && activeSession) {
+      if (code && code.data) {
         isScanningRef.current = true;
         setIsQrDetected(true);
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
@@ -330,28 +342,64 @@ export const AttendanceMemberView: React.FC = () => {
         clearInterval(scanIntervalRef.current);
       }
     };
-  }, [isCameraActive, activeSession, isSubmitting]);
+  }, [isCameraActive, isSubmitting, activeSession, attendanceSessions]);
 
-  // Handle Process QR Scan
+  // Handle Process QR / Barcode Scan
   const handleProcessScan = async (scannedData: string) => {
-    if (!activeSession || isSubmitting) {
-      isScanningRef.current = false;
-      setIsQrDetected(false);
-      return;
-    }
+    if (isSubmitting) return;
     setIsSubmitting(true);
 
+    // 1. Resolve session from scanned payload or activeSession
+    let targetSession = activeSession;
+    let extractedToken = scannedData;
+
+    try {
+      const trimmed = scannedData.trim();
+      if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+        const parsed = JSON.parse(trimmed);
+        const sid = parsed.sid || parsed.sessionId || parsed.id;
+        if (sid) {
+          const found = attendanceSessions.find((s) => s.id === sid);
+          if (found) targetSession = found;
+        }
+      } else if (trimmed.includes('sid=') || trimmed.includes('sessionId=')) {
+        const match = trimmed.match(/(?:sid|sessionId)=([^&]+)/);
+        if (match && match[1]) {
+          const found = attendanceSessions.find((s) => s.id === match[1]);
+          if (found) targetSession = found;
+        }
+      } else {
+        // Direct string match with session ID or code
+        const found = attendanceSessions.find((s) => s.id === trimmed || s.code === trimmed);
+        if (found) targetSession = found;
+      }
+    } catch {}
+
+    if (!targetSession) {
+      targetSession = attendanceSessions.find((s) => s.isActive) || null;
+    }
+
+    if (!targetSession) {
+      setIsSubmitting(false);
+      setIsQrDetected(false);
+      showToast('Sesi presensi tidak ditemukan atau belum dibuka oleh Guru/Admin.', 'warn');
+      setTimeout(() => {
+        isScanningRef.current = false;
+      }, 1500);
+      return;
+    }
+
     let coords: { lat: number; lng: number } | undefined;
-    if (activeSession.requireLocation) {
+    if (targetSession.requireLocation) {
       coords = await getCoordsPromise();
     }
 
     const res = await recordAttendance(
-      activeSession.id,
+      targetSession.id,
       'hadir',
       'qr_scan',
       undefined,
-      scannedData,
+      extractedToken,
       coords
     );
 
@@ -366,6 +414,53 @@ export const AttendanceMemberView: React.FC = () => {
       setTimeout(() => {
         isScanningRef.current = false;
       }, 1500);
+    }
+  };
+
+  // Handle Manual Code Submission (Rolling token / Session code)
+  const handleManualCodeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualCode.trim()) {
+      showToast('Masukkan kode presensi terlebih dahulu.', 'warn');
+      return;
+    }
+    if (!activeSession) {
+      showToast('Tidak ada sesi presensi yang aktif saat ini.', 'warn');
+      return;
+    }
+    setIsManualSubmitting(true);
+    let coords: { lat: number; lng: number } | undefined;
+    if (activeSession.requireLocation) {
+      coords = await getCoordsPromise();
+    }
+    const res = await recordAttendance(
+      activeSession.id,
+      'hadir',
+      'rolling_token',
+      undefined,
+      manualCode.trim().toUpperCase(),
+      coords
+    );
+    setIsManualSubmitting(false);
+    if (res.success) {
+      setManualCode('');
+      showToast('Presensi Anda berhasil dicatat! ✓', 'success');
+    } else {
+      showToast(res.message, 'warn');
+    }
+  };
+
+  // Manual refresh sessions from Supabase
+  const handleRefreshSessions = async () => {
+    setIsRefreshingSessions(true);
+    showToast('Menyinkronkan sesi presensi...', 'info');
+    try {
+      await syncWithSupabase();
+      showToast('Data sesi presensi berhasil diperbarui!', 'success');
+    } catch {
+      showToast('Gagal menyinkronkan data presensi.', 'warn');
+    } finally {
+      setIsRefreshingSessions(false);
     }
   };
 
@@ -524,11 +619,11 @@ export const AttendanceMemberView: React.FC = () => {
                 </div>
 
                 {/* Mode Selector */}
-                <div className="flex items-center gap-1 bg-[#140e29] p-1 rounded-xl border border-[#281b4e]">
+                <div className="flex items-center gap-1 bg-[#140e29] p-1 rounded-xl border border-[#281b4e] flex-wrap">
                   <button
                     type="button"
                     onClick={() => setActiveMode('camera')}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                       activeMode === 'camera'
                         ? 'bg-pink-500 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -539,8 +634,20 @@ export const AttendanceMemberView: React.FC = () => {
                   </button>
                   <button
                     type="button"
+                    onClick={() => setActiveMode('code')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      activeMode === 'code'
+                        ? 'bg-purple-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Keyboard className="w-3.5 h-3.5" />
+                    <span>Input Kode / Barcode</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setActiveMode('permission')}
-                    className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                       activeMode === 'permission'
                         ? 'bg-pink-500 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
@@ -813,7 +920,44 @@ export const AttendanceMemberView: React.FC = () => {
                 </div>
               )}
 
-              {/* MODE 2: AJUKAN IZIN / SAKIT */}
+              {/* MODE 2: INPUT KODE DINAMIS ATAU BARCODE SECARA MANUAL */}
+              {activeMode === 'code' && (
+                <form onSubmit={handleManualCodeSubmit} className="max-w-md mx-auto space-y-4">
+                  <div className="p-4 rounded-2xl bg-[#140e28] border border-[#2b1f52] space-y-2 text-center">
+                    <Barcode className="w-8 h-8 text-pink-400 mx-auto" />
+                    <h4 className="text-sm font-bold text-white">Masukkan 6 Digit Kode / Angka Barcode</h4>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      Ketikkan kode rolling yang tampil di bawah QR proyektor (misal: <strong className="text-pink-300 font-mono">ABC123</strong>) atau kode sesi absensi yang diberikan oleh Guru/Admin.
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-300 block mb-1.5">
+                      Kode Sesi Presensi / Token Barcode:
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={manualCode}
+                      onChange={(e) => setManualCode(e.target.value.toUpperCase())}
+                      placeholder="Contoh: W6E7Z2 atau ASESS-..."
+                      maxLength={32}
+                      className="w-full p-3.5 rounded-2xl bg-[#120e26] border border-[#291e4f] text-base font-mono font-black text-center tracking-widest text-pink-300 placeholder:text-slate-600 focus:outline-none focus:border-pink-500 uppercase"
+                    />
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isManualSubmitting || !manualCode.trim()}
+                    className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white font-extrabold text-xs shadow-lg shadow-pink-500/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-all active:scale-95"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{isManualSubmitting ? 'Memverifikasi...' : 'Verifikasi & Catat Hadir Sekarang'}</span>
+                  </button>
+                </form>
+              )}
+
+              {/* MODE 3: AJUKAN IZIN / SAKIT */}
               {activeMode === 'permission' && (
                 <form onSubmit={handlePermissionSubmit} className="max-w-md mx-auto space-y-4">
                   <div>
@@ -928,13 +1072,39 @@ export const AttendanceMemberView: React.FC = () => {
           )}
         </div>
       ) : (
-        /* NO ACTIVE SESSION BANNER */
-        <div className="p-8 text-center rounded-3xl bg-[#140e2b] border border-[#271d49] space-y-3">
-          <Clock className="w-10 h-10 text-slate-500 mx-auto" />
-          <h3 className="text-base font-bold text-white">Tidak Ada Sesi Presensi Yang Aktif</h3>
-          <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-            {terms.educatorTitle} atau Admin belum membuka sesi presensi digital saat ini. Halaman ini akan otomatis aktif begitu barcode kelas dibuka di depan kelas.
-          </p>
+        /* NO ACTIVE SESSION BANNER WITH SCANNER OVERRIDE & REFRESH */
+        <div className="p-8 text-center rounded-3xl bg-[#140e2b] border border-[#271d49] space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-pink-500/10 border border-pink-500/20 text-pink-400 flex items-center justify-center mx-auto">
+            <Clock className="w-7 h-7" />
+          </div>
+          <div>
+            <h3 className="text-base font-bold text-white">Belum Ada Sesi Presensi Terdeteksi</h3>
+            <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed mt-1">
+              Jika {terms.educatorTitle} atau Admin sedang membuka barcode absensi di proyektor kelas, Anda dapat langsung menyinkronkan data atau membuka pemindai kamera sekarang.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleRefreshSessions}
+              disabled={isRefreshingSessions}
+              className="px-4 py-2.5 rounded-xl bg-[#1d1538] hover:bg-[#261b47] border border-[#352562] text-xs font-bold text-white flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+            >
+              <RefreshCw className={`w-4 h-4 text-pink-400 ${isRefreshingSessions ? 'animate-spin' : ''}`} />
+              <span>{isRefreshingSessions ? 'Menyinkronkan...' : 'Segarkan Sesi Database'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveMode('camera');
+                startCamera();
+              }}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-xs font-black text-white flex items-center gap-2 shadow-lg shadow-pink-500/25 cursor-pointer transition-all active:scale-95"
+            >
+              <Camera className="w-4 h-4" />
+              <span>Buka Kamera &amp; Pindai Barcode Sekarang</span>
+            </button>
+          </div>
         </div>
       )}
 

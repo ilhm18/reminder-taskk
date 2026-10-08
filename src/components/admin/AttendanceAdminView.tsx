@@ -52,8 +52,11 @@ export const AttendanceAdminView: React.FC = () => {
     recordAttendance,
     updateAttendanceRecord,
     deleteAttendanceRecord,
+    syncWithSupabase,
     showToast,
   } = useApp();
+
+  const [isSyncingAdmin, setIsSyncingAdmin] = useState(false);
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
@@ -627,6 +630,24 @@ export const AttendanceAdminView: React.FC = () => {
                 </option>
               ))}
             </select>
+            <button
+              type="button"
+              onClick={async () => {
+                setIsSyncingAdmin(true);
+                showToast('Menyinkronkan data presensi dari database...', 'info');
+                try {
+                  await syncWithSupabase();
+                  showToast('Data presensi berhasil disinkronkan!', 'success');
+                } finally {
+                  setIsSyncingAdmin(false);
+                }
+              }}
+              disabled={isSyncingAdmin}
+              className="p-2 rounded-xl bg-[#140f2b] border border-[#2b1f50] hover:border-pink-500/50 text-slate-300 hover:text-white cursor-pointer transition-all active:scale-95"
+              title="Segarkan data presensi dari database Supabase"
+            >
+              <RefreshCw className={`w-4 h-4 text-pink-400 ${isSyncingAdmin ? 'animate-spin' : ''}`} />
+            </button>
           </div>
         )}
       </div>
@@ -669,27 +690,38 @@ export const AttendanceAdminView: React.FC = () => {
                       </span>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      {currentSession.isActive ? (
-                        <button
-                          type="button"
-                          onClick={() => closeAttendanceSession(currentSession.id)}
-                          className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <Square className="w-3.5 h-3.5" />
-                          <span>Tutup Sesi Presensi</span>
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => reopenAttendanceSession(currentSession.id)}
-                          className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
-                        >
-                          <Play className="w-3.5 h-3.5" />
-                          <span>Buka Kembali Sesi</span>
-                        </button>
-                      )}
-                    </div>
+                      <div className="flex items-center gap-2">
+                        {currentSession.isActive && (
+                          <button
+                            type="button"
+                            onClick={() => setIsProjectorFullscreen(true)}
+                            className="px-3 py-1.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 border border-pink-500/40 text-pink-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                            title="Buka tampilan proyektor layar penuh"
+                          >
+                            <Maximize2 className="w-3.5 h-3.5" />
+                            <span className="hidden sm:inline">Layar Penuh</span>
+                          </button>
+                        )}
+                        {currentSession.isActive ? (
+                          <button
+                            type="button"
+                            onClick={() => closeAttendanceSession(currentSession.id)}
+                            className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Square className="w-3.5 h-3.5" />
+                            <span>Tutup Sesi</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => reopenAttendanceSession(currentSession.id)}
+                            className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                          >
+                            <Play className="w-3.5 h-3.5" />
+                            <span>Buka Kembali Sesi</span>
+                          </button>
+                        )}
+                      </div>
                   </div>
 
                   <h3 className="text-lg sm:text-xl font-black text-white tracking-tight mb-1">
@@ -732,6 +764,16 @@ export const AttendanceAdminView: React.FC = () => {
                             className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
                             style={{ width: `${100 - tokenDetails.progressPercent}%` }}
                           />
+                        </div>
+
+                        {/* Kode rolling alternatif untuk siswa jika terkendala kamera/silau */}
+                        <div className="mt-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
+                          <span className="text-[10px] font-bold text-slate-500 uppercase">
+                            Kode Sesi Alternatif:
+                          </span>
+                          <span className="font-mono font-black text-sm tracking-widest text-pink-600">
+                            {tokenDetails.code}
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1683,6 +1725,79 @@ export const AttendanceAdminView: React.FC = () => {
                 Tutup
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: FULLSCREEN PROJECTOR DISPLAY */}
+      {isProjectorFullscreen && currentSession && (
+        <div className="fixed inset-0 z-50 bg-[#090715] flex flex-col justify-between p-6 sm:p-10 select-none animate-in fade-in duration-200">
+          {/* Header */}
+          <div className="w-full flex items-center justify-between pb-4 border-b border-[#251b47]">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
+                <QrCode className="w-5 h-5" />
+              </div>
+              <div>
+                <span className="text-[10px] uppercase font-bold text-pink-400 tracking-wider">
+                  LAYAR PROYEKTOR PRESENSI REAL-TIME
+                </span>
+                <h2 className="text-xl sm:text-2xl font-black text-white">{currentSession.title}</h2>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsProjectorFullscreen(false)}
+              className="p-3 rounded-2xl bg-[#1d1538] hover:bg-[#2d2054] text-white border border-[#372663] cursor-pointer transition-all"
+              title="Tutup Layar Penuh"
+            >
+              <Minimize2 className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Center High-Contrast QR Code */}
+          <div className="my-auto flex flex-col items-center space-y-4">
+            <div className="p-6 sm:p-8 rounded-3xl bg-white border-8 border-pink-500 shadow-2xl shadow-pink-500/30 flex flex-col items-center max-w-md w-full">
+              {qrCodeDataUrl ? (
+                <img
+                  src={qrCodeDataUrl}
+                  alt="QR Code Proyektor"
+                  className="w-72 h-72 sm:w-88 sm:h-88 object-contain"
+                />
+              ) : (
+                <div className="w-72 h-72 sm:w-88 sm:h-88 flex items-center justify-center text-slate-400">
+                  <RefreshCw className="w-10 h-10 animate-spin" />
+                </div>
+              )}
+
+              <div className="w-full mt-4 pt-3 border-t border-slate-200 space-y-2">
+                <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-700">
+                  <span>Pergantian Kode Otomatis:</span>
+                  <span className="text-pink-600 font-black">{tokenDetails.secondsRemaining}s</span>
+                </div>
+                <div className="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
+                    style={{ width: `${100 - tokenDetails.progressPercent}%` }}
+                  />
+                </div>
+                <div className="mt-3 p-3 bg-slate-50 rounded-xl flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-500">Kode Sesi Alternatif:</span>
+                  <span className="text-xl font-mono font-black tracking-widest text-pink-600">
+                    {tokenDetails.code}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <p className="text-sm font-semibold text-slate-300">
+              Buka menu <strong>Absensi Siswa</strong> &gt; Arahkan kamera ke layar untuk absen otomatis.
+            </p>
+          </div>
+
+          {/* Footer summary */}
+          <div className="w-full flex items-center justify-between pt-4 border-t border-[#251b47] text-xs text-slate-400">
+            <span>{currentRecords.length} siswa telah melakukan check-in</span>
+            <span className="text-emerald-400 font-bold font-mono">Live Sync Aktif ✓</span>
           </div>
         </div>
       )}

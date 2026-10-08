@@ -116,7 +116,10 @@ export const AttendanceView: React.FC = () => {
         try {
           const payload = JSON.stringify({
             app: 'RemindTask',
+            type: 'rt_attend_qr_v1',
+            sid: sess.id,
             sessionId: sess.id,
+            tok: sess.code,
             code: sess.code,
             classId: sess.classId,
           });

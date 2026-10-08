@@ -513,10 +513,15 @@ CREATE TABLE IF NOT EXISTS public.attendance_records (
   device_info TEXT,
   verification_method TEXT NOT NULL DEFAULT 'qr_scan',
   note TEXT,
+  proof_file_url TEXT,
+  proof_file_name TEXT,
   location_verified BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT uq_session_student UNIQUE (session_id, student_id)
 );
+
+ALTER TABLE IF EXISTS public.attendance_records ADD COLUMN IF NOT EXISTS proof_file_url TEXT;
+ALTER TABLE IF EXISTS public.attendance_records ADD COLUMN IF NOT EXISTS proof_file_name TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_attendance_records_session ON public.attendance_records(session_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_records_student ON public.attendance_records(student_id);

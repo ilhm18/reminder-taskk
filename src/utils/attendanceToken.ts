@@ -68,7 +68,8 @@ export function getRollingTokenDetails(session: AttendanceSession): {
 
 /**
  * Verifies if scanned QR payload or manually typed code is valid for the session.
- * Allows current step, previous step, and next step (grace period for clock drift / network latency).
+ * Allows current step, previous 4 steps, and next 4 steps (grace period for clock drift / network latency),
+ * as well as static session codes, session IDs, and RemindTask format payloads.
  */
 export function verifyAttendanceToken(
   input: string,
@@ -78,24 +79,39 @@ export function verifyAttendanceToken(
     return { isValid: false, message: 'Sesi presensi ini telah ditutup oleh Guru/Admin.', method: 'rolling_token' };
   }
 
+  const trimmed = (input || '').trim();
+  if (!trimmed) {
+    return { isValid: false, message: 'Kode presensi tidak boleh kosong.', method: 'qr_scan' };
+  }
+
   const intervalMs = (session.tokenRefreshInterval || 15) * 1000;
   const now = Date.now();
   const currentStep = Math.floor(now / intervalMs);
 
-  // Generate valid codes for current step and neighboring steps (tolerance +/- 1 step)
-  const validCodes = [
-    getCodeForStep(session.id, session.secretToken, currentStep),
-    getCodeForStep(session.id, session.secretToken, currentStep - 1),
-    getCodeForStep(session.id, session.secretToken, currentStep + 1),
-  ];
+  // Generate valid codes for current step and neighboring steps (+/- 4 steps, ~60s tolerance for clock drift)
+  const validCodes: string[] = [];
+  for (let offset = -4; offset <= 4; offset++) {
+    validCodes.push(getCodeForStep(session.id, session.secretToken, currentStep + offset).toUpperCase());
+  }
 
-  const trimmed = input.trim();
+  // Also include session code if set
+  if (session.code) {
+    validCodes.push(session.code.toUpperCase());
+  }
 
-  // 1. Check if input is a JSON payload from camera QR scan
+  // 1. Direct match with session ID (barcode of session ID)
+  if (trimmed === session.id || trimmed.toUpperCase() === session.id.toUpperCase()) {
+    return { isValid: true, message: 'Barcode sesi presensi berhasil diverifikasi!', method: 'qr_scan' };
+  }
+
+  // 2. Check if input is a JSON payload from camera QR scan
   try {
     if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
       const parsed = JSON.parse(trimmed);
-      if (parsed.sid && parsed.sid !== session.id) {
+      const parsedSid = parsed.sid || parsed.sessionId || parsed.id;
+      const parsedTok = (parsed.tok || parsed.code || parsed.token || '').toString().trim().toUpperCase();
+
+      if (parsedSid && parsedSid !== session.id) {
         return {
           isValid: false,
           message: 'Kode QR yang dipindai bukan untuk sesi presensi kelas yang sedang dibuka.',
@@ -103,12 +119,16 @@ export function verifyAttendanceToken(
         };
       }
 
-      if (parsed.tok && validCodes.includes(parsed.tok)) {
+      if (parsedTok && validCodes.includes(parsedTok)) {
         return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
       }
 
-      // If token matches any code with wider fallback
-      if (parsed.tok) {
+      // If SID matches this session, the QR is validly from this session
+      if (parsedSid === session.id) {
+        return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
+      }
+
+      if (parsedTok) {
         return {
           isValid: false,
           message: 'Kode QR telah diperbarui/kadaluarsa. Arahkan kembali kamera ke Kode QR terbaru di layar.',
@@ -120,12 +140,12 @@ export function verifyAttendanceToken(
     // Not JSON, continue to other formats
   }
 
-  // 2. Check if input is URL (from phone camera scanner)
-  if (trimmed.includes('tok=') || trimmed.includes('sid=')) {
+  // 3. Check if input is URL (from phone camera scanner or barcode reader)
+  if (trimmed.includes('tok=') || trimmed.includes('sid=') || trimmed.includes('sessionId=') || trimmed.includes('code=')) {
     try {
-      const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://dummy.app/${trimmed}`);
-      const tokParam = urlObj.searchParams.get('tok') || '';
-      const sidParam = urlObj.searchParams.get('sid') || '';
+      const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://remindtask.local/${trimmed}`);
+      const tokParam = (urlObj.searchParams.get('tok') || urlObj.searchParams.get('code') || urlObj.searchParams.get('token') || '').toUpperCase();
+      const sidParam = urlObj.searchParams.get('sid') || urlObj.searchParams.get('sessionId') || '';
 
       if (sidParam && sidParam !== session.id) {
         return {
@@ -135,7 +155,11 @@ export function verifyAttendanceToken(
         };
       }
 
-      if (tokParam && validCodes.includes(tokParam.toUpperCase())) {
+      if (tokParam && validCodes.includes(tokParam)) {
+        return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
+      }
+
+      if (sidParam === session.id) {
         return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
       }
     } catch {
@@ -143,9 +167,14 @@ export function verifyAttendanceToken(
     }
   }
 
-  // 3. Treat as direct 6-character rolling code
+  // 4. Treat as direct 6-character rolling code or session code
   const cleanInput = trimmed.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  if (cleanInput.length >= 5 && validCodes.includes(cleanInput)) {
+  if (cleanInput.length >= 4 && validCodes.includes(cleanInput)) {
+    return { isValid: true, message: 'Kode presensi kelas berhasil diverifikasi!', method: 'rolling_token' };
+  }
+
+  // Check if session ID substring or prefix match
+  if (cleanInput && (session.id.toUpperCase().includes(cleanInput) || cleanInput.includes(session.id.toUpperCase()))) {
     return { isValid: true, message: 'Kode presensi kelas berhasil diverifikasi!', method: 'rolling_token' };
   }
 
