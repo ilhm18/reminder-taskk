@@ -154,7 +154,7 @@ export const AttendanceAdminView: React.FC = () => {
             dark: '#000000',
             light: '#ffffff',
           },
-          errorCorrectionLevel: 'M',
+          errorCorrectionLevel: 'L',
         });
         setQrCodeDataUrl(url);
       } catch (err) {
@@ -706,7 +706,16 @@ export const AttendanceAdminView: React.FC = () => {
                   {/* Status Banner */}
                   <div className="flex items-center justify-between w-full mb-6 gap-2 flex-wrap">
                     <div className="flex items-center gap-2">
-                      <span className={`w-3 h-3 rounded-full ${currentSession.isActive ? 'bg-emerald-400 animate-ping' : 'bg-slate-500'}`} />
+                      <div className="relative flex h-3 w-3 items-center justify-center">
+                        {currentSession.isActive ? (
+                          <>
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                          </>
+                        ) : (
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-slate-500"></span>
+                        )}
+                      </div>
                       <span className="text-xs font-black text-white">
                         {currentSession.isActive ? 'SESI PRESENSI AKTIF' : 'SESI TELAH DITUTUP'}
                       </span>
@@ -786,16 +795,6 @@ export const AttendanceAdminView: React.FC = () => {
                             className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
                             style={{ width: `${100 - tokenDetails.progressPercent}%` }}
                           />
-                        </div>
-
-                        {/* Kode rolling alternatif untuk siswa jika terkendala kamera/silau */}
-                        <div className="mt-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between">
-                          <span className="text-[10px] font-bold text-slate-500 uppercase">
-                            Kode Sesi Alternatif:
-                          </span>
-                          <span className="font-mono font-black text-sm tracking-widest text-pink-600">
-                            {tokenDetails.code}
-                          </span>
                         </div>
                       </div>
                     </div>
@@ -1831,12 +1830,6 @@ export const AttendanceAdminView: React.FC = () => {
                     className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
                     style={{ width: `${100 - tokenDetails.progressPercent}%` }}
                   />
-                </div>
-                <div className="mt-3 p-3 bg-slate-50 rounded-xl flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-500">Kode Sesi Alternatif:</span>
-                  <span className="text-xl font-mono font-black tracking-widest text-pink-600">
-                    {tokenDetails.code}
-                  </span>
                 </div>
               </div>
             </div>

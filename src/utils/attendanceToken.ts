@@ -49,13 +49,8 @@ export function getRollingTokenDetails(session: AttendanceSession): {
   const progressPercent = Math.min(100, Math.max(0, ((intervalMs - msRemaining) / intervalMs) * 100));
 
   const code = getCodeForStep(session.id, session.secretToken, step);
-  const qrPayload = JSON.stringify({
-    type: 'rt_attend_qr_v1',
-    sid: session.id,
-    cid: session.classId,
-    tok: code,
-    step,
-  });
+  // Extremely short compact format to drastically reduce QR code density (larger dots, much easier scanning from distance)
+  const qrPayload = `v1;${session.id};${code};${step}`;
 
   return {
     code,
@@ -102,6 +97,37 @@ export function verifyAttendanceToken(
   // 1. Direct match with session ID (barcode of session ID)
   if (trimmed === session.id || trimmed.toUpperCase() === session.id.toUpperCase()) {
     return { isValid: true, message: 'Barcode sesi presensi berhasil diverifikasi!', method: 'qr_scan' };
+  }
+
+  // 1.5. Compact format support: v1;sid;code;step
+  if (trimmed.startsWith('v1;')) {
+    const parts = trimmed.split(';');
+    const parsedSid = parts[1];
+    const parsedTok = (parts[2] || '').trim().toUpperCase();
+
+    if (parsedSid && parsedSid !== session.id) {
+      return {
+        isValid: false,
+        message: 'Kode QR yang dipindai bukan untuk sesi presensi kelas yang sedang dibuka.',
+        method: 'qr_scan',
+      };
+    }
+
+    if (parsedTok && validCodes.includes(parsedTok)) {
+      return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
+    }
+
+    if (parsedSid === session.id) {
+      return { isValid: true, message: 'Kode QR presensi berhasil diverifikasi!', method: 'qr_scan' };
+    }
+
+    if (parsedTok) {
+      return {
+        isValid: false,
+        message: 'Kode QR telah diperbarui/kadaluarsa. Arahkan kembali kamera ke Kode QR terbaru di layar.',
+        method: 'qr_scan',
+      };
+    }
   }
 
   // 2. Check if input is a JSON payload from camera QR scan

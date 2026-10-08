@@ -94,6 +94,9 @@ export const AttendanceMemberView: React.FC = () => {
   const [isQrDetected, setIsQrDetected] = useState(false);
   const [showScanTips, setShowScanTips] = useState(false);
   const scanIntervalRef = useRef<number | null>(null);
+  const scanLoopRef = useRef<number | null>(null);
+  const lastScanTimeRef = useRef<number>(0);
+  const tickCountRef = useRef<number>(0);
   const isScanningRef = useRef<boolean>(false);
 
   // Start Camera
@@ -177,6 +180,10 @@ export const AttendanceMemberView: React.FC = () => {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
     }
+    if (scanLoopRef.current) {
+      cancelAnimationFrame(scanLoopRef.current);
+      scanLoopRef.current = null;
+    }
   };
 
   // Toggle Torch (Senter Kamera)
@@ -217,40 +224,97 @@ export const AttendanceMemberView: React.FC = () => {
     };
   }, [activeMode, myRecordForActive]);
 
-  // QR Scanning Loop using jsQR
+  // QR Scanning Loop using jsQR & advanced multi-strategy processing
   useEffect(() => {
     if (!isCameraActive || isSubmitting) return;
 
     const scanFrame = () => {
-      if (isScanningRef.current || isSubmitting) return;
+      if (isScanningRef.current || isSubmitting) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
 
       const video = videoRef.current;
       const canvas = canvasRef.current;
       if (!video || !canvas || video.readyState < 2) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
         return;
       }
 
       const vw = video.videoWidth;
       const vh = video.videoHeight;
-      if (vw === 0 || vh === 0) return;
+      if (vw === 0 || vh === 0) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
+
+      // Throttle scanning to once every 180ms to prevent main thread blocking,
+      // keeping the camera feed buttery smooth at 60 FPS for instant hardware autofocus.
+      const now = Date.now();
+      if (now - lastScanTimeRef.current < 180) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
+      lastScanTimeRef.current = now;
 
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) return;
+      if (!ctx) {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
+        return;
+      }
 
-      // Downsample to max 640px for ultra fast processing on mobile devices
-      const maxDim = 640;
-      const scale = Math.min(1, maxDim / Math.max(vw, vh));
-      const targetW = Math.floor(vw * scale);
-      const targetH = Math.floor(vh * scale);
+      tickCountRef.current += 1;
+      const strategy = tickCountRef.current % 3;
 
-      canvas.width = targetW;
-      canvas.height = targetH;
-      ctx.drawImage(video, 0, 0, targetW, targetH);
+      let code: any = null;
 
-      const imageData = ctx.getImageData(0, 0, targetW, targetH);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'attemptBoth',
-      });
+      if (strategy === 0) {
+        // STRATEGY 1: Center-crop (75% of shortest side), standard contrast.
+        // Extremely fast because canvas is small, and zoomed-in for distant scanning.
+        const minDim = Math.min(vw, vh);
+        const cropSize = Math.floor(minDim * 0.75);
+        const sx = Math.floor((vw - cropSize) / 2);
+        const sy = Math.floor((vh - cropSize) / 2);
+
+        canvas.width = 420;
+        canvas.height = 420;
+        ctx.filter = 'none';
+        ctx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, 420, 420);
+
+        const imageData = ctx.getImageData(0, 0, 420, 420);
+        code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+      } else if (strategy === 1) {
+        // STRATEGY 2: Center-crop (75% of shortest side), high-contrast grayscale.
+        // Ideal for screen reflections, glare, and low-contrast projector displays!
+        const minDim = Math.min(vw, vh);
+        const cropSize = Math.floor(minDim * 0.75);
+        const sx = Math.floor((vw - cropSize) / 2);
+        const sy = Math.floor((vh - cropSize) / 2);
+
+        canvas.width = 420;
+        canvas.height = 420;
+        ctx.filter = 'contrast(1.6) brightness(1.15) grayscale(1)';
+        ctx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, 420, 420);
+
+        const imageData = ctx.getImageData(0, 0, 420, 420);
+        code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+      } else {
+        // STRATEGY 3: Full downsampled view.
+        // Handles cases where the student is holding the phone crooked or offset.
+        canvas.width = 480;
+        canvas.height = Math.floor(480 * (vh / vw));
+        ctx.filter = 'none';
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'attemptBoth',
+        });
+      }
 
       if (code && code.data) {
         isScanningRef.current = true;
@@ -261,13 +325,15 @@ export const AttendanceMemberView: React.FC = () => {
           } catch {}
         }
         handleProcessScan(code.data);
+      } else {
+        scanLoopRef.current = requestAnimationFrame(scanFrame);
       }
     };
 
-    scanIntervalRef.current = window.setInterval(scanFrame, 120);
+    scanLoopRef.current = requestAnimationFrame(scanFrame);
     return () => {
-      if (scanIntervalRef.current) {
-        clearInterval(scanIntervalRef.current);
+      if (scanLoopRef.current) {
+        cancelAnimationFrame(scanLoopRef.current);
       }
     };
   }, [isCameraActive, isSubmitting, activeSession, attendanceSessions]);

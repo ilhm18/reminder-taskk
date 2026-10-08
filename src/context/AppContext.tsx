@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useState, useRef } from 'react';
 import {
   INITIAL_CLASSES,
   INITIAL_MATERIALS,
@@ -299,6 +299,8 @@ const extractSender = (a: any) => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const mutatingSessionIdsRef = useRef<Record<string, boolean>>({});
+
   const [classes, setClasses] = useState<ClassItem[]>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CLASSES);
@@ -486,7 +488,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
+  const attendanceSessionsRef = useRef(attendanceSessions);
   useEffect(() => {
+    attendanceSessionsRef.current = attendanceSessions;
     try {
       localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(attendanceSessions));
     } catch {}
@@ -4969,38 +4973,101 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const closeAttendanceSession = async (sessionId: string) => {
+    mutatingSessionIdsRef.current[sessionId] = true;
     const endTime = new Date().toISOString();
+    
     setAttendanceSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime } : s))
     );
 
     const client = getSupabaseClient();
+    let success = true;
     if (client) {
       try {
-        await client.from('attendance_sessions').update({ is_active: false, end_time: endTime }).eq('id', sessionId);
+        const { error } = await client
+          .from('attendance_sessions')
+          .update({ is_active: false, end_time: endTime })
+          .eq('id', sessionId);
+          
+        if (error) {
+          console.error('Supabase close session error:', error);
+          success = false;
+          showToast(`Gagal memperbarui database: ${error.message}`, 'warn');
+          // Revert local state if error
+          setAttendanceSessions((prev) =>
+            prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
+          );
+        }
       } catch (err) {
         console.warn('Supabase attendance_sessions update error:', err);
+        success = false;
+        // Revert local state
+        setAttendanceSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
+        );
+      } finally {
+        setTimeout(() => {
+          delete mutatingSessionIdsRef.current[sessionId];
+        }, 2000);
       }
+    } else {
+      setTimeout(() => {
+        delete mutatingSessionIdsRef.current[sessionId];
+      }, 500);
     }
 
-    showToast('Sesi presensi berhasil ditutup. Siswa tidak dapat lagi melakukan presensi mandiri.', 'info');
+    if (success) {
+      showToast('Sesi presensi berhasil ditutup. Siswa tidak dapat lagi melakukan presensi mandiri.', 'info');
+    }
   };
 
   const reopenAttendanceSession = async (sessionId: string) => {
+    mutatingSessionIdsRef.current[sessionId] = true;
+    
     setAttendanceSessions((prev) =>
       prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
     );
 
     const client = getSupabaseClient();
+    let success = true;
     if (client) {
       try {
-        await client.from('attendance_sessions').update({ is_active: true, end_time: null }).eq('id', sessionId);
+        const { error } = await client
+          .from('attendance_sessions')
+          .update({ is_active: true, end_time: null })
+          .eq('id', sessionId);
+          
+        if (error) {
+          console.error('Supabase reopen session error:', error);
+          success = false;
+          showToast(`Gagal membuka kembali sesi: ${error.message}`, 'warn');
+          // Revert local state
+          const oldSession = attendanceSessions.find((s) => s.id === sessionId);
+          setAttendanceSessions((prev) =>
+            prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
+          );
+        }
       } catch (err) {
         console.warn('Supabase attendance_sessions reopen error:', err);
+        success = false;
+        const oldSession = attendanceSessions.find((s) => s.id === sessionId);
+        setAttendanceSessions((prev) =>
+          prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
+        );
+      } finally {
+        setTimeout(() => {
+          delete mutatingSessionIdsRef.current[sessionId];
+        }, 2000);
       }
+    } else {
+      setTimeout(() => {
+        delete mutatingSessionIdsRef.current[sessionId];
+      }, 500);
     }
 
-    showToast('Sesi presensi dibuka kembali!', 'success');
+    if (success) {
+      showToast('Sesi presensi dibuka kembali!', 'success');
+    }
   };
 
   const deleteAttendanceSession = async (sessionId: string) => {
@@ -5263,25 +5330,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Also refresh active sessions list
       const sessRes = await client.from('attendance_sessions').select('*').order('created_at', { ascending: false }).limit(50);
       if (Array.isArray(sessRes.data)) {
-        const mappedSessions: AttendanceSession[] = sessRes.data.map((s: any) => ({
-          id: s.id,
-          classId: s.class_id,
-          title: s.title,
-          subject: s.subject || '',
-          date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
-          startTime: s.start_time || s.created_at,
-          endTime: s.end_time || undefined,
-          isActive: s.is_active ?? true,
-          secretToken: s.secret_token,
-          tokenRefreshInterval: s.token_refresh_interval || 15,
-          requireLocation: s.require_location ?? false,
-          latitude: s.latitude ? Number(s.latitude) : undefined,
-          longitude: s.longitude ? Number(s.longitude) : undefined,
-          radiusMeters: s.radius_meters ? Number(s.radius_meters) : 100,
-          createdBy: s.created_by,
-          createdByName: s.created_by_name || 'Admin',
-          createdAt: s.created_at || new Date().toISOString(),
-        }));
+        const mappedSessions: AttendanceSession[] = sessRes.data.map((s: any) => {
+          if (mutatingSessionIdsRef.current[s.id]) {
+            const localSession = attendanceSessionsRef.current.find((x) => x.id === s.id);
+            if (localSession) return localSession;
+          }
+          return {
+            id: s.id,
+            classId: s.class_id,
+            title: s.title,
+            subject: s.subject || '',
+            date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+            startTime: s.start_time || s.created_at,
+            endTime: s.end_time || undefined,
+            isActive: s.is_active ?? true,
+            secretToken: s.secret_token,
+            tokenRefreshInterval: s.token_refresh_interval || 15,
+            requireLocation: s.require_location ?? false,
+            latitude: s.latitude ? Number(s.latitude) : undefined,
+            longitude: s.longitude ? Number(s.longitude) : undefined,
+            radiusMeters: s.radius_meters ? Number(s.radius_meters) : 100,
+            createdBy: s.created_by,
+            createdByName: s.created_by_name || 'Admin',
+            createdAt: s.created_at || new Date().toISOString(),
+          };
+        });
         setAttendanceSessions(mappedSessions);
       }
     } catch (err) {
