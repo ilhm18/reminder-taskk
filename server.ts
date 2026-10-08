@@ -409,10 +409,233 @@ const sUrl = process.env.VITE_SUPABASE_URL || 'https://wlxfjilmfjpgmeshznab.supa
 const sKey = process.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndseGZqaWxtZmpwZ21lc2h6bmFiIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTA4NTIwOTksImV4cCI6MjEwNjQyODA5OX0.9_hdZ3qS08s2vR2JToOu2Te0bjkWzXUoLoYcZrRRb2U';
 const supabase = createClient(sUrl, sKey);
 
-// Endpoint: Automated task deadline warning check
-app.post('/api/check-upcoming-deadlines', async (_req, res) => {
-  return res.json({ success: true, notificationCount: 0, message: 'Deadline check completed.' });
-});
+// Endpoint: Automated task deadline warning check (1 hari sebelum jadwal yang ditentukan)
+const checkUpcomingDeadlinesHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const client = getSupabaseClientForRequest(req);
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+
+    const { data: tasks, error } = await client.from('tasks').select('*');
+    if (error || !Array.isArray(tasks)) {
+      return res.json({ success: true, upcomingTasks: [], message: 'No tasks or error.' });
+    }
+
+    const upcomingTasks: any[] = [];
+    for (const t of tasks) {
+      if (!t.due_date) continue;
+      const dueTime = new Date(t.due_date).getTime();
+      const diff = dueTime - now;
+
+      // 1 hari sebelum jadwal (dalam rentang 24 jam ke depan)
+      if (diff > 0 && diff <= oneDayMs) {
+        upcomingTasks.push({
+          id: t.id,
+          title: t.title,
+          dueDate: t.due_date,
+          classId: t.class_id,
+        });
+
+        // Simpan notifikasi ke database jika belum pernah dibuat
+        try {
+          const { data: existing } = await client
+            .from('notifications')
+            .select('id')
+            .eq('task_id', t.id)
+            .eq('type', 'deadline')
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            await client.from('notifications').insert({
+              id: 'notif-deadline-' + t.id + '-' + Date.now(),
+              title: '⏰ Pengingat Tugas: 1 Hari Menjelang Batas Waktu!',
+              message: `Tugas "${t.title}" akan berakhir dalam waktu kurang dari 24 jam (Deadline: ${formatToWIB(t.due_date)}). Segera selesaikan!`,
+              type: 'deadline',
+              target_role: 'member',
+              class_id: t.class_id,
+              task_id: t.id,
+              read: false,
+              created_at: new Date().toISOString(),
+            });
+          }
+        } catch (notifErr) {
+          console.warn('[SERVER DEADLINE NOTIF]:', notifErr);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      upcomingTasks,
+      notificationCount: upcomingTasks.length,
+      message: `${upcomingTasks.length} tugas mendekati deadline (H-1) terdeteksi.`
+    });
+  } catch (err: any) {
+    return res.json({ success: false, upcomingTasks: [], error: err?.message });
+  }
+};
+
+app.post('/api/check-upcoming-deadlines', checkUpcomingDeadlinesHandler);
+app.get('/api/check-upcoming-deadlines', checkUpcomingDeadlinesHandler);
+
+// Endpoint: Automated schedule warning check (2 jam sebelum jadwal dimulai)
+const checkUpcomingSchedulesHandler = async (req: express.Request, res: express.Response) => {
+  try {
+    const client = getSupabaseClientForRequest(req);
+    const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const now = new Date();
+    // Convert UTC to WIB (UTC+7)
+    const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const wibDate = new Date(utcMs + (7 * 3600000));
+    const currentDay = dayNames[wibDate.getDay()];
+    const currentMinutes = wibDate.getHours() * 60 + wibDate.getMinutes();
+    const todayDateStr = wibDate.toISOString().split('T')[0];
+
+    const { data: schedulesList, error } = await client.from('schedules').select('*').eq('day', currentDay);
+    if (error || !Array.isArray(schedulesList)) {
+      return res.json({ success: true, upcomingSchedules: [], message: 'No schedules or error.' });
+    }
+
+    const upcomingSchedules: any[] = [];
+    for (const s of schedulesList) {
+      if (!s.start_time) continue;
+      const [h, m] = s.start_time.split(':').map(Number);
+      if (isNaN(h) || isNaN(m)) continue;
+      const classMinutes = h * 60 + m;
+      const diffMinutes = classMinutes - currentMinutes;
+
+      // 2 jam sebelum jadwal dimulai (dalam rentang 1 s.d. 125 menit ke depan)
+      if (diffMinutes > 0 && diffMinutes <= 125) {
+        upcomingSchedules.push({
+          id: s.id,
+          subject: s.subject,
+          startTime: s.start_time,
+          classId: s.class_id,
+          diffMinutes,
+        });
+
+        // Simpan notifikasi ke database jika belum pernah dibuat hari ini
+        try {
+          const notifId = `notif-sched-2h-${s.id}-${todayDateStr}`;
+          const { data: existing } = await client
+            .from('notifications')
+            .select('id')
+            .eq('id', notifId)
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            await client.from('notifications').insert({
+              id: notifId,
+              title: `⏰ Pengingat: 2 Jam Sebelum Kelas ${s.subject}!`,
+              message: `Mata pelajaran/kuliah "${s.subject}" akan dimulai pada pukul ${s.start_time} WIB (${diffMinutes} menit lagi) di ${s.room_or_link || s.room || 'ruang kelas'}. Pengampu: ${s.teacher_name || 'Guru/Dosen'}.`,
+              type: 'broadcast',
+              target_role: 'member',
+              class_id: s.class_id,
+              read: false,
+              timestamp: new Date().toISOString(),
+              created_at: new Date().toISOString(),
+            });
+          }
+        } catch (notifErr) {
+          console.warn('[SERVER SCHEDULE 2H NOTIF]:', notifErr);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      upcomingSchedules,
+      notificationCount: upcomingSchedules.length,
+      message: `${upcomingSchedules.length} jadwal pelajaran mendekati 2 jam sebelum mulai.`
+    });
+  } catch (err: any) {
+    return res.json({ success: false, upcomingSchedules: [], error: err?.message });
+  }
+};
+
+app.post('/api/check-upcoming-schedules', checkUpcomingSchedulesHandler);
+app.get('/api/check-upcoming-schedules', checkUpcomingSchedulesHandler);
+
+// Background automated timer running on server every 60s
+setInterval(async () => {
+  try {
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const { data: tasks } = await supabase.from('tasks').select('*');
+    if (Array.isArray(tasks)) {
+      for (const t of tasks) {
+        if (!t.due_date) continue;
+        const dueTime = new Date(t.due_date).getTime();
+        const diff = dueTime - now;
+        if (diff > 0 && diff <= oneDayMs) {
+          const { data: existing } = await supabase
+            .from('notifications')
+            .select('id')
+            .eq('task_id', t.id)
+            .eq('type', 'deadline')
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            await supabase.from('notifications').insert({
+              id: 'notif-deadline-' + t.id + '-' + Date.now(),
+              title: '⏰ Pengingat Tugas: 1 Hari Menjelang Batas Waktu!',
+              message: `Tugas "${t.title}" akan berakhir dalam waktu kurang dari 24 jam (Deadline: ${formatToWIB(t.due_date)}). Segera selesaikan!`,
+              type: 'deadline',
+              target_role: 'member',
+              class_id: t.class_id,
+              task_id: t.id,
+              read: false,
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+
+    // Automated 2-hour pre-class check in background
+    const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const nowDate = new Date();
+    const utcMs = nowDate.getTime() + (nowDate.getTimezoneOffset() * 60000);
+    const wibDate = new Date(utcMs + (7 * 3600000));
+    const currentDay = dayNames[wibDate.getDay()];
+    const currentMinutes = wibDate.getHours() * 60 + wibDate.getMinutes();
+    const todayDateStr = wibDate.toISOString().split('T')[0];
+
+    const { data: schedulesList } = await supabase.from('schedules').select('*').eq('day', currentDay);
+    if (Array.isArray(schedulesList)) {
+      for (const s of schedulesList) {
+        if (!s.start_time) continue;
+        const [h, m] = s.start_time.split(':').map(Number);
+        if (isNaN(h) || isNaN(m)) continue;
+        const classMinutes = h * 60 + m;
+        const diffMinutes = classMinutes - currentMinutes;
+
+        if (diffMinutes > 0 && diffMinutes <= 125) {
+          const notifId = `notif-sched-2h-${s.id}-${todayDateStr}`;
+          const { data: existing } = await supabase
+            .from('notifications')
+            .select('id')
+            .eq('id', notifId)
+            .limit(1);
+
+          if (!existing || existing.length === 0) {
+            await supabase.from('notifications').insert({
+              id: notifId,
+              title: `⏰ Pengingat: 2 Jam Sebelum Kelas ${s.subject}!`,
+              message: `Mata pelajaran/kuliah "${s.subject}" akan dimulai pada pukul ${s.start_time} WIB (${diffMinutes} menit lagi) di ${s.room_or_link || s.room || 'ruang kelas'}. Pengampu: ${s.teacher_name || 'Guru/Dosen'}.`,
+              type: 'broadcast',
+              target_role: 'member',
+              class_id: s.class_id,
+              read: false,
+              timestamp: new Date().toISOString(),
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+      }
+    }
+  } catch {}
+}, 60000);
 
 // Endpoint: Instantly notify platform owner of any major transaction/event
 app.post('/api/notify-owner-action', async (_req, res) => {

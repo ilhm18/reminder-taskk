@@ -17,6 +17,7 @@ import {
 import { useApp } from '../../context/AppContext';
 import { AnonymousMessage, AnonymousTag } from '../../types';
 import { formatIndonesianDate } from '../../utils/notification';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 const TAG_CONFIG: Record<
   AnonymousTag,
@@ -77,6 +78,9 @@ export const AnonymousWallAdminView: React.FC = () => {
     likeAnonymousMessage,
     showToast,
   } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   const [selectedTag, setSelectedTag] = useState<'all' | AnonymousTag>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -145,10 +149,10 @@ export const AnonymousWallAdminView: React.FC = () => {
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-white mt-1">
-                Pesan &amp; Aspirasi Anonim Siswa
+                Pesan &amp; Aspirasi Anonim {terms.memberTitle}
               </h2>
               <p className="text-xs text-slate-300 mt-0.5">
-                Pantau aspirasi dan curhatan anonim dari siswa di kelas Anda, sematkan pesan penting, dan berikan tanggapan resmi.
+                Pantau aspirasi dan curhatan anonim dari {terms.memberTitle.toLowerCase()} di kelas Anda, sematkan pesan penting, dan berikan tanggapan resmi.
               </p>
             </div>
           </div>

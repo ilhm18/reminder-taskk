@@ -23,6 +23,7 @@ import {
   FileSpreadsheet,
   FileText,
   Globe,
+  GraduationCap,
   Heart,
   HelpCircle,
   Image as ImageIcon,
@@ -44,6 +45,7 @@ import {
   QrCode,
   RefreshCw,
   Search,
+  School,
   Settings,
   Shield,
   Sparkles,
@@ -57,7 +59,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { ClassMaterial, Task, TaskSubmission } from '../../types';
+import { ClassMaterial, Task, TaskSubmission, EducatorType } from '../../types';
 import { AnalyticsView } from '../analytics/AnalyticsView';
 import { CalendarView } from '../calendar/CalendarView';
 import { DailyReportModal } from '../modals/DailyReportModal';
@@ -81,6 +83,8 @@ import { formatIndonesianDate, getTaskDeadlineStatus, playNotificationSound } fr
 import { downloadEvidenceFile, getFileCategory } from '../../utils/fileEvidence';
 import { getSupabaseClient } from '../../services/supabase';
 import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
+import { AdminEducatorTypeModal } from '../modals/AdminEducatorTypeModal';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 export const AdminPanel: React.FC = () => {
   const {
@@ -95,6 +99,7 @@ export const AdminPanel: React.FC = () => {
     deleteMaterial,
     deleteClass,
     showToast,
+    confirmAdminEducatorType,
     setIsNotificationDrawerOpen,
     unreadNotifCount,
     onlineUsersCount,
@@ -108,6 +113,21 @@ export const AdminPanel: React.FC = () => {
     moderateSubmission,
     forumPosts,
   } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
+
+  const hasConfirmedEducator = useMemo(() => {
+    if (currentUser?.educatorType) return true;
+    if (currentClass?.educatorType) return true;
+    if (!currentUser?.id) return true;
+    if (localStorage.getItem('rt_confirmed_educator_' + currentUser.id) !== null) return true;
+    if (currentUser.username && localStorage.getItem('rt_confirmed_educator_' + currentUser.username.toLowerCase()) !== null) return true;
+    if (currentUser.classId && localStorage.getItem('rt_confirmed_educator_' + currentUser.classId) !== null) return true;
+    if (currentClass?.id && localStorage.getItem('rt_confirmed_educator_' + currentClass.id) !== null) return true;
+    if (currentClass?.code && localStorage.getItem('rt_confirmed_educator_' + currentClass.code) !== null) return true;
+    return false;
+  }, [currentUser?.id, currentUser?.username, currentUser?.classId, currentUser?.educatorType, currentClass?.id, currentClass?.code, currentClass?.educatorType]);
 
   const [preservedScrollPos, setPreservedScrollPos] = useState<number | null>(null);
 
@@ -125,7 +145,7 @@ export const AdminPanel: React.FC = () => {
 
     moderateSubmission(submissionId, 'completed', 'Disetujui langsung oleh Pengajar/Admin.');
     playNotificationSound('success');
-    showToast('Tugas siswa berhasil disetujui (Approved)!', 'success');
+    showToast(`Tugas ${terms.memberTitle.toLowerCase()} berhasil disetujui (Approved)!`, 'success');
 
     const doRestore = () => {
       const el = document.querySelector('main');
@@ -297,11 +317,30 @@ export const AdminPanel: React.FC = () => {
       const newTab = getAdminTabFromUrl();
       setActiveTab(newTab);
     };
+
+    const handleCustomNavigate = (e: any) => {
+      if (e?.detail?.tab) {
+        setActiveTab(e.detail.tab as AdminTab);
+        if (e.detail.taskId) {
+          setTimeout(() => {
+            const el = document.getElementById(`task-${e.detail.taskId}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.add('ring-2', 'ring-pink-500');
+              setTimeout(() => el.classList.remove('ring-2', 'ring-pink-500'), 3000);
+            }
+          }, 350);
+        }
+      }
+    };
+
     window.addEventListener('popstate', handleUrlSync);
     window.addEventListener('hashchange', handleUrlSync);
+    window.addEventListener('rt:navigate-tab', handleCustomNavigate);
     return () => {
       window.removeEventListener('popstate', handleUrlSync);
       window.removeEventListener('hashchange', handleUrlSync);
+      window.removeEventListener('rt:navigate-tab', handleCustomNavigate);
     };
   }, []);
 
@@ -324,11 +363,22 @@ export const AdminPanel: React.FC = () => {
 
   // Settings tab form states
   const [adminNameInput, setAdminNameInput] = useState(currentUser?.name || '');
-  const [adminEmailInput, setAdminEmailInput] = useState(currentUser?.email || '');
   const [adminNewPassword, setAdminNewPassword] = useState('');
   const [adminClassNameInput, setAdminClassNameInput] = useState(currentClass?.name || '');
   const [adminClassDescInput, setAdminClassDescInput] = useState(currentClass?.description || '');
+  const [adminEducatorTypeSetting, setAdminEducatorTypeSetting] = useState<EducatorType>(
+    currentUser?.educatorType || currentClass?.educatorType || 'dosen'
+  );
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+
+  useEffect(() => {
+    if (currentUser?.name) setAdminNameInput(currentUser.name);
+    if (currentClass?.name) setAdminClassNameInput(currentClass.name);
+    if (currentClass?.description) setAdminClassDescInput(currentClass.description);
+    if (currentUser?.educatorType || currentClass?.educatorType) {
+      setAdminEducatorTypeSetting(currentUser?.educatorType || currentClass?.educatorType || 'dosen');
+    }
+  }, [currentUser, currentClass]);
 
   // Access Logs filtering & mapping
   const [accessLogSearch, setAccessLogSearch] = useState('');
@@ -452,11 +502,11 @@ export const AdminPanel: React.FC = () => {
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'kelas', label: 'Ruang Kelas', icon: Layers },
         { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen },
-        { id: 'absensi', label: 'Absensi Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
-        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle },
-        { id: 'jadwal', label: 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
+        { id: 'absensi', label: `Absensi ${terms.memberTitlePlural}`, icon: QrCode, iconColor: 'text-emerald-400' },
+        { id: 'bank_soal', label: terms.isCollege ? 'Bank Soal Perkuliahan' : 'Bank Soal & Ujian', icon: HelpCircle },
+        { id: 'jadwal', label: terms.isCollege ? 'Jadwal Perkuliahan' : 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
         { id: 'kalender', label: 'Kalender', icon: Calendar },
-        { id: 'statistik', label: 'Statistik Kelas', icon: BarChart3 },
+        { id: 'statistik', label: `Statistik ${terms.memberTitlePlural}`, icon: BarChart3 },
       ],
     },
     {
@@ -503,13 +553,15 @@ export const AdminPanel: React.FC = () => {
     if (!currentUser) return;
     setIsSavingSettings(true);
 
-    const client = getSupabaseClient();
-    if (client) {
-      try {
+    try {
+      await confirmAdminEducatorType(adminEducatorTypeSetting);
+
+      const client = getSupabaseClient();
+      if (client) {
         const profileUpdates: any = {
           name: adminNameInput.trim(),
-          email: adminEmailInput.trim(),
           class_name: adminClassNameInput.trim(),
+          educator_type: adminEducatorTypeSetting,
         };
         if (adminNewPassword.trim()) {
           profileUpdates.password = adminNewPassword.trim();
@@ -522,16 +574,17 @@ export const AdminPanel: React.FC = () => {
             name: adminClassNameInput.trim(),
             description: adminClassDescInput.trim(),
             admin_name: adminNameInput.trim(),
+            educator_type: adminEducatorTypeSetting,
           }).eq('id', currentClass.id);
         }
-
-        showToast('Pengaturan akun & kelas berhasil disimpan ke database!', 'success');
-        setAdminNewPassword('');
-        await syncWithSupabase();
-      } catch (err) {
-        console.warn('Save settings error:', err);
-        showToast('Gagal menyimpan pengaturan.', 'warn');
       }
+
+      showToast('Pengaturan profil & identitas admin berhasil disimpan!', 'success');
+      setAdminNewPassword('');
+      await syncWithSupabase();
+    } catch (err) {
+      console.warn('Save settings error:', err);
+      showToast('Gagal menyimpan pengaturan.', 'warn');
     }
     setIsSavingSettings(false);
   };
@@ -592,8 +645,13 @@ export const AdminPanel: React.FC = () => {
                     <Shield className="w-4 h-4" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-xs text-white">Admin Panel</h3>
-                    <p className="text-[10px] text-slate-400">{currentUser?.name || 'Admin'}</p>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="font-bold text-xs text-white truncate max-w-[120px]">{currentUser?.name || 'Admin'}</h3>
+                      <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                        {terms.educatorTitle}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 truncate max-w-[150px]">{currentClass?.name || 'Ruang Kelas'}</p>
                   </div>
                 </div>
                 <button
@@ -713,9 +771,14 @@ export const AdminPanel: React.FC = () => {
               <Shield className="w-5 h-5 text-pink-400" />
             </div>
             <div className="min-w-0 flex-1">
-              <h4 className="text-xs font-bold text-white truncate">
-                {currentUser?.name || 'Admin'}
-              </h4>
+              <div className="flex items-center gap-1.5">
+                <h4 className="text-xs font-bold text-white truncate">
+                  {currentUser?.name || 'Admin'}
+                </h4>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 shrink-0">
+                  {terms.educatorTitle}
+                </span>
+              </div>
               <p className="text-[10px] text-slate-400 truncate">
                 {currentClass?.name || 'Ruang Kelas'}
               </p>
@@ -991,7 +1054,7 @@ export const AdminPanel: React.FC = () => {
                     <span className="text-2xl font-black text-white font-mono tabular-nums">
                       {realOnlineUsers}
                     </span>
-                    <span className="text-[10px] text-slate-400 font-medium">Siswa / User</span>
+                    <span className="text-[10px] text-slate-400 font-medium">{terms.memberTitle} / User</span>
                   </div>
                   <span className="text-[9px] text-slate-500 block mt-1 font-mono truncate">
                     Aktif di kode kelas: {currentClass?.code || '---'}
@@ -1014,17 +1077,17 @@ export const AdminPanel: React.FC = () => {
                         <span className="font-bold text-white">{currentClass?.name || ' '}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-[#231d3d]">
-                        <span className="text-slate-400">Admin Pengelola</span>
+                        <span className="text-slate-400">Peran Admin ({terms.educatorTitle})</span>
                         <span className="font-bold text-white">{currentUser?.name || currentClass?.adminName || ' '}</span>
                       </div>
                       <div className="flex items-center justify-between py-2 border-b border-[#231d3d]">
-                        <span className="text-slate-400">Kode Akses Siswa</span>
+                        <span className="text-slate-400">Kode Akses {terms.memberTitle}</span>
                         <span className="font-mono font-bold text-pink-400">{currentClass?.code || ' '}</span>
                       </div>
                       <div className="flex items-center justify-between py-2">
-                        <span className="text-slate-400">Total Anggota Terdaftar</span>
+                        <span className="text-slate-400">Total {terms.memberTitlePlural} Terdaftar</span>
                         <span className="font-bold text-white">
-                          {currentClass?.memberCount || 0} Siswa
+                          {currentClass?.memberCount || 0} {terms.memberTitlePlural}
                         </span>
                       </div>
                     </div>
@@ -1054,7 +1117,7 @@ export const AdminPanel: React.FC = () => {
                     <button
                       onClick={async () => {
                         if (!currentClass) return;
-                        if (window.confirm(`PERHATIAN: Apakah Anda yakin ingin menghapus kelas "${currentClass.name}" beserta seluruh tugas, data siswa, dan akun admin terkait secara permanen?`)) {
+                        if (window.confirm(`PERHATIAN: Apakah Anda yakin ingin menghapus kelas "${currentClass.name}" beserta seluruh tugas, data ${terms.memberTitlePlural.toLowerCase()}, dan akun ${terms.educatorTitle.toLowerCase()} terkait secara permanen?`)) {
                           await deleteClass(currentClass.id);
                           showToast('Kelas dan data terkait berhasil dihapus.', 'success');
                           logout();
@@ -1142,7 +1205,7 @@ export const AdminPanel: React.FC = () => {
                       onClick={() => setActiveTab('moderasi')}
                       className="text-purple-300 hover:text-white font-semibold flex items-center gap-1 cursor-pointer"
                     >
-                      <span>Lihat Unggahan Siswa</span>
+                      <span>Lihat Unggahan {terms.memberTitle}</span>
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1158,13 +1221,13 @@ export const AdminPanel: React.FC = () => {
                       <h3 className="text-lg font-extrabold text-white">Daftar &amp; Riwayat Pengakses Kode Kelas</h3>
                     </div>
                     <p className="text-xs text-slate-400">
-                      Pantau siapa saja siswa yang memasukkan kode kelas <span className="font-mono text-pink-300 font-bold">({currentClass?.code})</span> beserta waktu akses secara realtime.
+                      Pantau siapa saja {terms.memberTitlePlural.toLowerCase()} yang memasukkan kode kelas <span className="font-mono text-pink-300 font-bold">({currentClass?.code})</span> beserta waktu akses secara realtime.
                     </p>
                   </div>
 
                   <div className="flex items-center gap-2">
                     <span className="px-3 py-1.5 rounded-xl bg-pink-500/15 border border-pink-500/30 text-pink-300 font-mono text-xs font-bold shrink-0">
-                      {currentClassLogs.length} Siswa Terdaftar
+                      {currentClassLogs.length} {terms.memberTitlePlural} Terdaftar
                     </span>
                   </div>
                 </div>
@@ -1176,7 +1239,7 @@ export const AdminPanel: React.FC = () => {
                     type="text"
                     value={accessLogSearch}
                     onChange={(e) => setAccessLogSearch(e.target.value)}
-                    placeholder="Cari berdasarkan nama siswa..."
+                    placeholder={`Cari berdasarkan nama ${terms.memberTitle.toLowerCase()}...`}
                     className="w-full bg-[#0f0c1f] border border-[#271e42] rounded-xl pl-10 pr-4 py-2 text-xs text-white placeholder:text-slate-500 outline-none focus:border-pink-500 transition-colors font-medium"
                   />
                 </div>
@@ -1185,13 +1248,13 @@ export const AdminPanel: React.FC = () => {
                 <div className="overflow-x-auto">
                   {filteredAccessLogs.length === 0 ? (
                     <div className="text-center py-10 text-slate-500 text-xs">
-                      Belum ada riwayat siswa yang mengakses kode kelas ini.
+                      Belum ada riwayat {terms.memberTitlePlural.toLowerCase()} yang mengakses kode kelas ini.
                     </div>
                   ) : (
                     <table className="w-full text-left text-xs">
                       <thead>
                         <tr className="border-b border-[#241c42] text-slate-400">
-                          <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Nama Siswa</th>
+                          <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Nama {terms.memberTitle}</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Kode Kelas</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Waktu Akses</th>
                           <th className="pb-3 font-bold uppercase tracking-wider text-[10px]">Perangkat</th>
@@ -1225,13 +1288,13 @@ export const AdminPanel: React.FC = () => {
                                 type="button"
                                 onClick={async (e) => {
                                   e.stopPropagation();
-                                  if (window.confirm(`Hapus siswa "${log.studentName}" dari kelas ini?`)) {
+                                  if (window.confirm(`Hapus ${terms.memberTitle.toLowerCase()} "${log.studentName}" dari kelas ini?`)) {
                                     await deleteMemberUser(log.studentId);
-                                    showToast(`Siswa "${log.studentName}" berhasil dihapus dari kelas.`, 'info');
+                                    showToast(`${terms.memberTitle} "${log.studentName}" berhasil dihapus dari kelas.`, 'info');
                                   }
                                 }}
                                 className="px-2 py-1 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 text-[10px] font-bold border border-red-500/30 transition-colors inline-flex items-center gap-1 cursor-pointer relative z-20"
-                                title="Hapus Siswa dari Kelas"
+                                title={`Hapus ${terms.memberTitle} dari Kelas`}
                               >
                                 <Trash2 className="w-2.5 h-2.5" />
                                 <span>Hapus</span>
@@ -1252,9 +1315,9 @@ export const AdminPanel: React.FC = () => {
             <div className="space-y-6">
               <div className="p-6 rounded-3xl bg-gradient-to-r from-[#20153f] via-[#1a1233] to-[#120f26] border border-[#34275a] flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-black text-white">Dashboard Pengajar</h2>
+                  <h2 className="text-2xl font-black text-white">Dashboard {terms.educatorTitle}</h2>
                   <p className="text-xs text-slate-300 mt-1">
-                    Kelola tenggat waktu, buat instruksi baru, dan periksa penyerahan tugas member.
+                    Kelola tenggat waktu, buat instruksi baru, dan periksa penyerahan tugas {terms.memberTitlePlural.toLowerCase()}.
                   </p>
                 </div>
                 <button
@@ -1311,7 +1374,7 @@ export const AdminPanel: React.FC = () => {
                           </div>
                           <p className="text-xs text-slate-400 mt-1 max-w-xl">{t.description}</p>
                           <span className="text-[11px] text-slate-400 font-mono mt-1 block">
-                            Tenggat: {formatIndonesianDate(t.dueDate)} • {subCount} siswa mengumpulkan
+                            Tenggat: {formatIndonesianDate(t.dueDate)} • {subCount} {terms.memberTitlePlural.toLowerCase()} mengumpulkan
                           </span>
                         </div>
 
@@ -1618,7 +1681,7 @@ export const AdminPanel: React.FC = () => {
                       <p className="text-xs text-slate-400 max-w-md mx-auto">
                         {materialSearch || selectedMaterialCategory !== 'all'
                           ? 'Tidak ada materi yang sesuai dengan filter pencarian.'
-                          : 'Bagikan modul pembelajaran, slide presentasi, dokumen, atau video referensi untuk membantu siswa belajar.'}
+                          : `Bagikan modul pembelajaran, slide presentasi, dokumen, atau video referensi untuk membantu ${terms.memberTitlePlural.toLowerCase()} belajar.`}
                       </p>
                       <button
                         onClick={() => {
@@ -1792,9 +1855,9 @@ export const AdminPanel: React.FC = () => {
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-[#141126] border border-[#272144] p-5 rounded-3xl">
                 <div>
-                  <h3 className="text-lg font-bold text-white">Pemeriksaan & Penilaian Tugas Member</h3>
+                  <h3 className="text-lg font-bold text-white">Pemeriksaan & Penilaian Tugas {terms.memberTitlePlural}</h3>
                   <p className="text-xs text-slate-400">
-                    Tinjau berkas, setujui (Approve), atau berikan catatan revisi kepada anggota kelas
+                    Tinjau berkas, setujui (Approve), atau berikan catatan revisi kepada {terms.memberTitlePlural.toLowerCase()}
                   </p>
                 </div>
                 <span className="text-xs font-mono font-bold text-pink-300 px-3 py-1.5 rounded-xl bg-[#23193f] border border-[#3b2a64]">
@@ -1811,7 +1874,7 @@ export const AdminPanel: React.FC = () => {
                   <table className="w-full text-left text-xs">
                     <thead>
                       <tr className="border-b border-[#261f44] text-slate-400">
-                        <th className="pb-3 font-semibold">Nama Siswa</th>
+                        <th className="pb-3 font-semibold">Nama {terms.memberTitle}</th>
                         <th className="pb-3 font-semibold">Tugas</th>
                         <th className="pb-3 font-semibold">Berkas Unggahan</th>
                         <th className="pb-3 font-semibold">Waktu Kirim</th>
@@ -1903,7 +1966,7 @@ export const AdminPanel: React.FC = () => {
                                   onClick={() => {
                                     const success = downloadEvidenceFile(sub.fileName || 'bukti_tugas', sub.fileUrl || '', {
                                       studentName: sub.memberName,
-                                      taskTitle: task?.title || 'Tugas Siswa',
+                                      taskTitle: task?.title || ('Tugas ' + terms.memberTitle),
                                       submittedAt: formatIndonesianDate(sub.submittedAt),
                                       note: sub.submissionNote,
                                     });
@@ -1971,7 +2034,7 @@ export const AdminPanel: React.FC = () => {
                       <span>Kelola &amp; Hapus Anggota Kelas</span>
                     </h3>
                     <p className="text-xs text-slate-400 mt-0.5">
-                      Hapus anggota atau siswa yang sudah tidak aktif / salah masuk kelas.
+                      Hapus anggota atau {terms.memberTitlePlural.toLowerCase()} yang sudah tidak aktif / salah masuk kelas.
                     </p>
                   </div>
                   <span className="px-3 py-1 rounded-xl bg-pink-500/20 text-pink-300 border border-pink-500/30 text-xs font-mono font-bold">
@@ -1982,7 +2045,7 @@ export const AdminPanel: React.FC = () => {
                 <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                   {currentClassLogs.length === 0 ? (
                     <p className="text-xs text-slate-500 italic py-3 text-center">
-                      Belum ada siswa terdaftar di kelas ini.
+                      Belum ada {terms.memberTitlePlural.toLowerCase()} terdaftar di kelas ini.
                     </p>
                   ) : (
                     currentClassLogs.map((m) => (
@@ -1996,23 +2059,23 @@ export const AdminPanel: React.FC = () => {
                           </div>
                           <div>
                             <span className="font-bold text-white block">{m.studentName}</span>
-                            <span className="text-[10px] text-slate-400 font-mono">{m.studentEmail}</span>
+                            <span className="text-[10px] text-slate-500 font-mono">ID: {m.studentId}</span>
                           </div>
                         </div>
 
                         <button
                           type="button"
                           onClick={async () => {
-                            if (window.confirm(`Yakin ingin menghapus siswa "${m.studentName}" dari kelas?`)) {
+                            if (window.confirm(`Yakin ingin menghapus ${terms.memberTitle.toLowerCase()} "${m.studentName}" dari kelas?`)) {
                               await deleteMemberUser(m.studentId);
-                              showToast(`Siswa "${m.studentName}" telah dihapus dari kelas.`, 'info');
+                              showToast(`${terms.memberTitle} "${m.studentName}" telah dihapus dari kelas.`, 'info');
                             }
                           }}
                           className="px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 hover:text-rose-200 border border-rose-500/30 font-bold text-xs flex items-center gap-1 transition-colors cursor-pointer"
-                          title="Hapus siswa ini dari kelas"
+                          title={`Hapus ${terms.memberTitle.toLowerCase()} ini dari kelas`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
-                          <span>Hapus Siswa</span>
+                          <span>Hapus {terms.memberTitle}</span>
                         </button>
                       </div>
                     ))
@@ -2031,7 +2094,7 @@ export const AdminPanel: React.FC = () => {
 
                 <form onSubmit={handleSaveSettings} className="space-y-4 max-w-xl text-xs">
                   <div>
-                    <label className="block text-slate-300 font-semibold mb-1.5">Nama Admin / Pengajar</label>
+                    <label className="block text-slate-300 font-semibold mb-1.5">Nama Admin / {terms.educatorTitle}</label>
                     <input
                       type="text"
                       value={adminNameInput}
@@ -2052,6 +2115,86 @@ export const AdminPanel: React.FC = () => {
                       placeholder="Masukkan password baru..."
                       className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-4 py-2.5 text-white outline-none focus:border-pink-500 font-mono"
                     />
+                  </div>
+
+                  {/* Educator Role Selection Setting */}
+                  <div className="pt-2 border-t border-[#251e44] space-y-2">
+                    <label className="block text-slate-300 font-semibold mb-1">
+                      Identitas Peran Admin &amp; Jenis Kelas
+                    </label>
+                    <span className="text-[11px] text-slate-400 block mb-2">
+                      Ubah peran pengelola dan jenis kelas Anda kapan saja untuk menyesuaikan sebutan Dosen/Guru/Pengurus Kelas &amp; Mahasiswa/Siswa secara otomatis.
+                    </span>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {/* DOSEN */}
+                      <button
+                        type="button"
+                        onClick={() => setAdminEducatorTypeSetting('dosen')}
+                        className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all cursor-pointer ${
+                          adminEducatorTypeSetting === 'dosen'
+                            ? 'bg-pink-500/20 border-pink-500 text-white font-bold'
+                            : 'bg-[#1b1633] border-[#342a5a] text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <GraduationCap className="w-4 h-4 text-pink-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="text-xs block text-white font-bold">Dosen</span>
+                          <span className="text-[10px] text-slate-400 font-normal">Mengampu Perkuliahan • Anggota: Mahasiswa</span>
+                        </div>
+                      </button>
+
+                      {/* GURU */}
+                      <button
+                        type="button"
+                        onClick={() => setAdminEducatorTypeSetting('guru')}
+                        className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all cursor-pointer ${
+                          adminEducatorTypeSetting === 'guru'
+                            ? 'bg-pink-500/20 border-pink-500 text-white font-bold'
+                            : 'bg-[#1b1633] border-[#342a5a] text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <School className="w-4 h-4 text-purple-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="text-xs block text-white font-bold">Guru</span>
+                          <span className="text-[10px] text-slate-400 font-normal">Mengajar Sekolah • Anggota: Siswa</span>
+                        </div>
+                      </button>
+
+                      {/* PENGURUS KELAS MAHASISWA */}
+                      <button
+                        type="button"
+                        onClick={() => setAdminEducatorTypeSetting('pengurus_mahasiswa')}
+                        className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all cursor-pointer ${
+                          adminEducatorTypeSetting === 'pengurus_mahasiswa'
+                            ? 'bg-pink-500/20 border-pink-500 text-white font-bold'
+                            : 'bg-[#1b1633] border-[#342a5a] text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Users className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="text-xs block text-white font-bold">Pengurus (Kuliah)</span>
+                          <span className="text-[10px] text-slate-400 font-normal">Kelas Kuliah • Anggota: Mahasiswa</span>
+                        </div>
+                      </button>
+
+                      {/* PENGURUS KELAS SEKOLAH */}
+                      <button
+                        type="button"
+                        onClick={() => setAdminEducatorTypeSetting('pengurus_sekolah')}
+                        className={`p-3 rounded-xl border text-left flex items-start gap-2.5 transition-all cursor-pointer ${
+                          adminEducatorTypeSetting === 'pengurus_sekolah'
+                            ? 'bg-pink-500/20 border-pink-500 text-white font-bold'
+                            : 'bg-[#1b1633] border-[#342a5a] text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <Users className="w-4 h-4 text-teal-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="text-xs block text-white font-bold">Pengurus (Sekolah)</span>
+                          <span className="text-[10px] text-slate-400 font-normal">Kelas Sekolah • Anggota: Siswa</span>
+                        </div>
+                      </button>
+                    </div>
                   </div>
 
                   <div className="pt-2 border-t border-[#251e44]">
@@ -2160,6 +2303,9 @@ export const AdminPanel: React.FC = () => {
       <BroadcastModal
         isOpen={isBroadcastModalOpen}
         onClose={() => setIsBroadcastModalOpen(false)}
+      />
+      <AdminEducatorTypeModal
+        isOpen={currentUser?.role === 'admin' && !hasConfirmedEducator}
       />
 
     </div>

@@ -29,6 +29,11 @@ import {
   Unlock,
   Image as ImageIcon,
   Barcode,
+  Zap,
+  RotateCw,
+  Sparkles,
+  HelpCircle,
+  Info,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -71,7 +76,7 @@ export const AttendanceView: React.FC = () => {
 
   // Member states
   const [activeTab, setActiveTab] = useState<'scan' | 'history'>('scan');
-  const [manualCodeInput, setManualCodeInput] = useState('');
+  const [scannedQrToken, setScannedQrToken] = useState('');
   const [memberStatus, setMemberStatus] = useState<AttendanceStatus>('hadir');
   const [memberNote, setMemberNote] = useState('');
   const [proofFileName, setProofFileName] = useState('');
@@ -83,6 +88,10 @@ export const AttendanceView: React.FC = () => {
 
   // Camera QR Scanner states
   const [isScannerActive, setIsScannerActive] = useState(false);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isTorchOn, setIsTorchOn] = useState(false);
+  const [hasTorchSupport, setHasTorchSupport] = useState(false);
+  const [showScanTips, setShowScanTips] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -151,18 +160,10 @@ export const AttendanceView: React.FC = () => {
 
   // Process decoded QR data
   const processDecodedCode = (decodedRaw: string) => {
-    let extractedCode = decodedRaw.trim();
-    try {
-      if (extractedCode.startsWith('{') && extractedCode.endsWith('}')) {
-        const parsed = JSON.parse(extractedCode);
-        if (parsed.code) extractedCode = parsed.code;
-      }
-    } catch {}
-
-    extractedCode = extractedCode.toUpperCase();
-    setManualCodeInput(extractedCode);
+    const token = decodedRaw.trim();
+    setScannedQrToken(token);
     playNotificationSound('beep');
-    showToast(`QR Code terdeteksi: ${extractedCode}!`, 'success');
+    showToast('QR Code presensi berhasil dipindai!', 'success');
     stopCamera();
   };
 
@@ -190,13 +191,33 @@ export const AttendanceView: React.FC = () => {
   }, []);
 
   // Start Camera Scanner
-  const startCamera = async () => {
+  const startCamera = async (targetFacing: 'environment' | 'user' = facingMode) => {
     setIsScannerActive(true);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' },
-      });
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+      }
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: targetFacing } },
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+        });
+      }
       streamRef.current = stream;
+
+      try {
+        const videoTrack = stream.getVideoTracks()[0];
+        const capabilities: any = videoTrack?.getCapabilities ? videoTrack.getCapabilities() : {};
+        setHasTorchSupport(Boolean(capabilities?.torch));
+      } catch {
+        setHasTorchSupport(false);
+      }
+
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
@@ -204,9 +225,31 @@ export const AttendanceView: React.FC = () => {
         scanLoopRef.current = requestAnimationFrame(tickScanner);
       }
     } catch (err) {
-      showToast('Tidak dapat membuka kamera. Masukkan kode manual atau unggah foto QR di bawah.', 'warn');
+      showToast('Tidak dapat membuka kamera. Silakan pindaikan dari foto QR atau izinkan akses kamera.', 'warn');
       setIsScannerActive(false);
     }
+  };
+
+  const toggleTorch = async () => {
+    if (!streamRef.current) return;
+    try {
+      const track = streamRef.current.getVideoTracks()[0];
+      if (track) {
+        const nextState = !isTorchOn;
+        await (track as any).applyConstraints({
+          advanced: [{ torch: nextState }],
+        });
+        setIsTorchOn(nextState);
+      }
+    } catch (err) {
+      console.warn('Torch toggle error:', err);
+    }
+  };
+
+  const toggleCameraFacing = async () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    await startCamera(nextFacing);
   };
 
   const stopCamera = () => {
@@ -219,6 +262,7 @@ export const AttendanceView: React.FC = () => {
       streamRef.current = null;
     }
     setIsScannerActive(false);
+    setIsTorchOn(false);
   };
 
   // Scan QR from image file
@@ -317,31 +361,32 @@ export const AttendanceView: React.FC = () => {
 
     // Radius Validation for 'Hadir'
     if (memberStatus === 'hadir') {
-      if (memberLat === null || memberLon === null) {
-        showToast('Wajib mengaktifkan lokasi GPS untuk presensi Hadir!', 'warn');
-        await handleGetMemberLocation();
-        return;
-      }
-      const sessLat = sessionToSubmit.latitude ?? 0;
-      const sessLon = sessionToSubmit.longitude ?? 0;
-      const maxRadius = sessionToSubmit.radiusMeters || 100;
-      const dist = calculateDistanceMeters(
-        sessLat,
-        sessLon,
-        memberLat,
-        memberLon
-      );
-      if (dist > maxRadius) {
-        showToast(`Gagal! Anda berada ${dist} meter dari kelas (Maksimal radius ${maxRadius}m).`, 'warn');
-        return;
+      const sessLat = sessionToSubmit.latitude;
+      const sessLon = sessionToSubmit.longitude;
+      const hasSessionCoords = sessLat !== undefined && sessLon !== undefined && sessLat !== 0 && sessLon !== 0;
+
+      if (hasSessionCoords || sessionToSubmit.requireLocation) {
+        if (memberLat === null || memberLon === null || isNaN(memberLat) || isNaN(memberLon) || (memberLat === 0 && memberLon === 0)) {
+          showToast('Wajib mengaktifkan lokasi GPS untuk presensi Hadir!', 'warn');
+          await handleGetMemberLocation();
+          return;
+        }
+        const maxRadius = sessionToSubmit.radiusMeters || 100;
+        const dist = calculateDistanceMeters(
+          sessLat || 0,
+          sessLon || 0,
+          memberLat,
+          memberLon
+        );
+        if (dist > maxRadius) {
+          showToast(`Presensi HADIR Ditolak! Anda terdeteksi berada ${dist} meter di luar area kelas (Maksimal radius ${maxRadius}m). Terdeteksi potensi sabotase lokasi!`, 'warn');
+          return;
+        }
       }
     }
 
-    // Attachment validation for Sakit & Izin
-    if ((memberStatus === 'sakit' || memberStatus === 'izin') && !proofFileUrl) {
-      showToast(`Wajib melampirkan foto/surat keterangan untuk status ${memberStatus.toUpperCase()}!`, 'warn');
-      return;
-    }
+    // Attachment validation for Sakit & Izin (Optional now)
+    // Optional photo proof attachment allowed for any status
 
     setIsSubmitting(true);
     try {
@@ -353,7 +398,7 @@ export const AttendanceView: React.FC = () => {
         proofFileName: proofFileName || undefined,
         proofFileUrl: proofFileUrl || undefined,
         note: memberNote.trim() || undefined,
-        manualCode: manualCodeInput.trim() || undefined,
+        verificationToken: scannedQrToken.trim() || undefined,
       });
 
       if (res.success) {
@@ -363,7 +408,7 @@ export const AttendanceView: React.FC = () => {
         setProofFileName('');
         setProofFileUrl('');
         setMemberNote('');
-        setManualCodeInput('');
+        setScannedQrToken('');
       } else {
         showToast(res.message, 'warn');
       }
@@ -549,30 +594,6 @@ export const AttendanceView: React.FC = () => {
                         <span className="text-[10px] font-black font-mono text-slate-900 mt-1 uppercase tracking-widest">
                           SCAN ME • REMINDTASK
                         </span>
-                      </div>
-
-                      {/* Manual Code Box */}
-                      <div className="p-3.5 rounded-2xl bg-[#1b1538] border border-[#2f2355] flex items-center justify-between">
-                        <div>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                            KODE MANUAL ABSEN:
-                          </span>
-                          <span className="text-xl font-black font-mono tracking-widest text-pink-300">
-                            {activeSession.code}
-                          </span>
-                        </div>
-                        <button
-                          onClick={() => {
-                            if (activeSession.code) {
-                              navigator.clipboard.writeText(activeSession.code);
-                              showToast(`Kode ${activeSession.code} disalin!`, 'success');
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-[#251d45] hover:bg-[#34275e] text-white text-xs font-bold border border-[#3b2c6b] flex items-center gap-1 cursor-pointer"
-                        >
-                          <Copy className="w-3.5 h-3.5" />
-                          <span>Salin</span>
-                        </button>
                       </div>
 
                       {/* GPS Radius Metric */}
@@ -846,25 +867,47 @@ export const AttendanceView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Proof attachment for Sakit or Izin */}
-                {(memberStatus === 'sakit' || memberStatus === 'izin') && (
-                  <div className="p-4 rounded-2xl bg-[#181330] border border-[#2b224d] space-y-3 animate-in fade-in duration-200">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                        <UploadCloud className="w-4 h-4" />
-                        <span>Wajib Unggah Bukti {memberStatus === 'sakit' ? 'Surat Dokter' : 'Surat Izin'}:</span>
-                      </span>
-                      {proofFileName && (
-                        <span className="text-[10px] text-emerald-400 font-bold">Terlampir</span>
-                      )}
+                {/* Proof attachment (Opsional) */}
+                <div className="p-4 rounded-2xl bg-[#181330] border border-[#2b224d] space-y-3 animate-in fade-in duration-200">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-pink-300 flex items-center gap-1.5">
+                      <UploadCloud className="w-4 h-4 text-pink-400" />
+                      <span>Lampiran / Bukti Foto (Opsional):</span>
+                    </span>
+                    {proofFileName && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setProofFileName('');
+                          setProofFileUrl('');
+                        }}
+                        className="text-[10px] text-red-400 hover:text-red-300 font-bold underline cursor-pointer"
+                      >
+                        Hapus Foto
+                      </button>
+                    )}
+                  </div>
+
+                  {proofFileUrl && proofFileUrl.startsWith('data:image/') ? (
+                    <div className="relative rounded-xl overflow-hidden border border-[#3d2e66] bg-[#120e24] p-2 flex items-center gap-3">
+                      <img
+                        src={proofFileUrl}
+                        alt="Pratinjau Bukti Foto"
+                        className="w-16 h-16 object-cover rounded-lg border border-purple-500/30 shrink-0"
+                      />
+                      <div className="flex-1 min-w-0 text-left">
+                        <p className="text-xs font-bold text-white truncate">{proofFileName || 'Bukti_Foto.jpg'}</p>
+                        <p className="text-[10px] text-emerald-400 font-medium">✓ Pratinjau foto siap terlampir</p>
+                      </div>
                     </div>
+                  ) : (
                     <label className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-[#3d2e66] hover:border-pink-500 rounded-xl bg-[#120e24] cursor-pointer transition-colors group">
                       <UploadCloud className="w-6 h-6 text-pink-400 mb-1 group-hover:scale-110 transition-transform" />
                       <span className="text-xs font-bold text-white text-center">
-                        {proofFileName || 'Pilih Foto / Dokumen Surat Keterangan'}
+                        {proofFileName || 'Klik untuk pilih foto / surat keterangan (Opsional)'}
                       </span>
                       <span className="text-[10px] text-slate-400 mt-0.5">
-                        Maks. 12MB (JPG, PNG, PDF)
+                        Maks. 12MB • Foto (JPG, PNG, WebP), Surat Dokter, PDF
                       </span>
                       <input
                         type="file"
@@ -873,8 +916,8 @@ export const AttendanceView: React.FC = () => {
                         className="hidden"
                       />
                     </label>
-                  </div>
-                )}
+                  )}
+                </div>
 
                 {/* Note */}
                 <div>
@@ -891,49 +934,137 @@ export const AttendanceView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Column: Scan Camera & Manual Code (6 cols) */}
+              {/* Right Column: Scan Camera QR Code (6 cols) */}
               <div className="md:col-span-6 bg-[#141126] border border-[#272144] rounded-3xl p-6 shadow-xl space-y-5 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between pb-3 border-b border-[#231d3f] mb-4">
                     <h3 className="font-bold text-white text-base flex items-center gap-2">
                       <Scan className="w-4 h-4 text-pink-400" />
-                      <span>Scan Barcode / Masukkan Kode</span>
+                      <span>Scan QR Code Presensi Kelas</span>
                     </h3>
                   </div>
 
+                  {/* Scanned QR Confirmation Badge if scanned */}
+                  {scannedQrToken && (
+                    <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-between mb-3 text-emerald-300 animate-in fade-in duration-200">
+                      <div className="flex items-center gap-2 text-xs font-bold">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>QR Code Presensi Terverifikasi!</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setScannedQrToken('')}
+                        className="text-[10px] text-slate-400 hover:text-white underline cursor-pointer"
+                      >
+                        Pindai Ulang
+                      </button>
+                    </div>
+                  )}
+
                   {/* Camera Scanner Box */}
-                  <div className="relative rounded-2xl overflow-hidden bg-black aspect-video border-2 border-dashed border-pink-500/50 flex items-center justify-center mb-4 shadow-inner">
+                  <div className="relative rounded-3xl overflow-hidden bg-black aspect-video sm:aspect-[4/3] border-2 border-pink-500/50 flex items-center justify-center mb-4 shadow-2xl select-none">
                     {isScannerActive ? (
                       <>
                         <video ref={videoRef} className="w-full h-full object-cover" />
                         <canvas ref={canvasRef} className="hidden" />
-                        
-                        {/* Target Reticle Frame */}
-                        <div className="absolute inset-8 sm:inset-12 border-2 border-pink-400/80 rounded-2xl pointer-events-none flex flex-col justify-between p-2 shadow-[0_0_15px_rgba(236,72,153,0.5)]">
-                          <div className="flex justify-between">
-                            <span className="w-4 h-4 border-t-3 border-l-3 border-pink-400" />
-                            <span className="w-4 h-4 border-t-3 border-r-3 border-pink-400" />
+
+                        {/* Top Overlay Banner & Camera Controls */}
+                        <div className="absolute top-3 inset-x-3 flex items-center justify-between pointer-events-auto z-10 gap-2">
+                          <div className="px-3 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white flex items-center gap-2 shadow-lg">
+                            <span className="w-2 h-2 rounded-full bg-pink-400 animate-pulse" />
+                            <span className="text-[11px] font-bold tracking-wide">
+                              Arahkan ke Kotak
+                            </span>
                           </div>
-                          {/* Animated Scan Line */}
-                          <div className="h-0.5 bg-gradient-to-r from-transparent via-pink-400 to-transparent shadow-lg shadow-pink-500 animate-pulse" />
-                          <div className="flex justify-between">
-                            <span className="w-4 h-4 border-b-3 border-l-3 border-pink-400" />
-                            <span className="w-4 h-4 border-b-3 border-r-3 border-pink-400" />
+
+                          <div className="flex items-center gap-1.5">
+                            {/* Flashlight/Torch Toggle */}
+                            {hasTorchSupport && (
+                              <button
+                                type="button"
+                                onClick={toggleTorch}
+                                className={`p-2 rounded-xl backdrop-blur-md border transition-all cursor-pointer ${
+                                  isTorchOn
+                                    ? 'bg-amber-500 text-black border-amber-400 shadow-lg shadow-amber-500/30'
+                                    : 'bg-black/70 text-white border-white/10 hover:bg-black/90'
+                                }`}
+                                title={isTorchOn ? 'Matikan Senter' : 'Nyalakan Senter'}
+                              >
+                                <Zap className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {/* Camera Switch (Flip) */}
+                            <button
+                              type="button"
+                              onClick={toggleCameraFacing}
+                              className="p-2 rounded-xl bg-black/70 hover:bg-black/90 text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer shadow-lg active:scale-95"
+                              title="Ganti Kamera (Depan / Belakang)"
+                            >
+                              <RotateCw className="w-4 h-4" />
+                            </button>
+
+                            {/* Help Tips Toggle */}
+                            <button
+                              type="button"
+                              onClick={() => setShowScanTips((v) => !v)}
+                              className={`p-2 rounded-xl backdrop-blur-md border transition-all cursor-pointer ${
+                                showScanTips
+                                  ? 'bg-pink-500 text-white border-pink-400'
+                                  : 'bg-black/70 text-white border-white/10 hover:bg-black/90'
+                              }`}
+                              title="Panduan Pemindaian"
+                            >
+                              <HelpCircle className="w-4 h-4" />
+                            </button>
+
+                            {/* Close Camera */}
+                            <button
+                              type="button"
+                              onClick={stopCamera}
+                              className="p-2 rounded-xl bg-black/70 hover:bg-black/90 text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer shadow-lg active:scale-95"
+                              title="Tutup Kamera"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
 
-                        <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/70 px-3 py-1 rounded-full text-[10px] font-mono text-pink-300">
-                          Mendeteksi QR Code Otomatis...
+                        {/* Target Reticle Viewfinder Box */}
+                        <div className="relative w-48 h-48 sm:w-56 sm:h-56 max-w-[70vw] max-h-[70vw] my-auto flex items-center justify-center pointer-events-none">
+                          {/* Dark vignette backdrop cutout outside the box */}
+                          <div className="absolute inset-0 rounded-3xl shadow-[0_0_0_9999px_rgba(7,5,20,0.68)] pointer-events-none" />
+
+                          {/* Border container with soft glow */}
+                          <div className="absolute inset-0 rounded-3xl border-2 border-pink-500/40 shadow-[0_0_20px_rgba(236,72,153,0.25),inset_0_0_15px_rgba(236,72,153,0.1)] pointer-events-none" />
+
+                          {/* 4 Crisp Neon Corner Brackets */}
+                          <div className="absolute -top-1 -left-1 w-7 h-7 border-t-4 border-l-4 border-pink-400 rounded-tl-2xl shadow-[0_0_14px_rgba(236,72,153,0.8)] pointer-events-none" />
+                          <div className="absolute -top-1 -right-1 w-7 h-7 border-t-4 border-r-4 border-pink-400 rounded-tr-2xl shadow-[0_0_14px_rgba(236,72,153,0.8)] pointer-events-none" />
+                          <div className="absolute -bottom-1 -left-1 w-7 h-7 border-b-4 border-l-4 border-pink-400 rounded-bl-2xl shadow-[0_0_14px_rgba(236,72,153,0.8)] pointer-events-none" />
+                          <div className="absolute -bottom-1 -right-1 w-7 h-7 border-b-4 border-r-4 border-pink-400 rounded-br-2xl shadow-[0_0_14px_rgba(236,72,153,0.8)] pointer-events-none" />
+
+                          {/* Animated Laser Sweep Line */}
+                          <div className="qr-scan-laser-line" />
+
+                          {/* Center Alignment Target Crosshair */}
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-50">
+                            <div className="relative w-8 h-8 flex items-center justify-center">
+                              <div className="w-2 h-2 rounded-full absolute bg-pink-400 animate-ping" />
+                              <div className="w-1.5 h-1.5 rounded-full absolute bg-pink-400" />
+                              <div className="w-5 h-[1.5px] absolute bg-pink-400/60" />
+                              <div className="h-5 w-[1.5px] absolute bg-pink-400/60" />
+                            </div>
+                          </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={stopCamera}
-                          className="absolute top-2 right-2 p-1.5 rounded-full bg-black/70 hover:bg-black text-white cursor-pointer"
-                          title="Tutup Kamera"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                        {/* Bottom Distance & Guidance Tip Badge */}
+                        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white flex items-center gap-2 shadow-lg whitespace-nowrap z-10 pointer-events-auto">
+                          <Scan className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                          <span className="text-[11px] font-semibold text-slate-200">
+                            Jarak ideal 20 – 40 cm • Sejajarkan ke kotak
+                          </span>
+                        </div>
                       </>
                     ) : (
                       <div className="text-center p-6 space-y-3">
@@ -945,7 +1076,7 @@ export const AttendanceView: React.FC = () => {
                         <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
                           <button
                             type="button"
-                            onClick={startCamera}
+                            onClick={() => startCamera(facingMode)}
                             className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white text-xs font-bold shadow-md cursor-pointer flex items-center gap-1.5"
                           >
                             <Camera className="w-3.5 h-3.5" />
@@ -966,20 +1097,38 @@ export const AttendanceView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* Manual Backup Code Input */}
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-slate-300">
-                      Atau Masukkan Kode 6-Karakter dari Guru:
-                    </label>
-                    <input
-                      type="text"
-                      value={manualCodeInput}
-                      onChange={(e) => setManualCodeInput(e.target.value.toUpperCase())}
-                      placeholder={activeSession?.code || 'KODE ABSEN'}
-                      maxLength={8}
-                      className="w-full bg-[#181333] border border-[#2f2454] focus:border-pink-500 rounded-xl px-4 py-3 text-sm font-mono font-bold text-center tracking-widest text-pink-300 outline-none uppercase"
-                    />
-                  </div>
+                  {/* Quick Tips Drawer / Helper Card */}
+                  {showScanTips && (
+                    <div className="p-3.5 rounded-2xl bg-[#171131] border border-pink-500/30 text-xs text-slate-300 space-y-2 shadow-xl mb-4 animate-in slide-in-from-top-2 duration-200">
+                      <div className="flex items-center justify-between text-white font-bold pb-1.5 border-b border-[#291e4f]">
+                        <span className="flex items-center gap-1.5 text-pink-300">
+                          <HelpCircle className="w-4 h-4 text-pink-400" />
+                          Panduan Memindai Presensi Cepat
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowScanTips(false)}
+                          className="text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-pink-400 block mb-0.5">1. Posisi Pas</span>
+                          Arahkan kamera hingga seluruh QR code masuk pas di dalam 4 sudut kotak panduan.
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-purple-400 block mb-0.5">2. Hindari Silau</span>
+                          Jika layar proyektor silau, miringkan sudut HP sedikit atau atur jarak 30 cm.
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-emerald-400 block mb-0.5">3. Tahan Stabil</span>
+                          Tahan kamera 1 detik hingga kode terisi dan terkonfirmasi otomatis.
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Final Submit Button */}
@@ -1212,13 +1361,6 @@ export const AttendanceView: React.FC = () => {
                   className="w-72 h-72 sm:w-96 sm:h-96 object-contain"
                 />
               )}
-            </div>
-
-            <div className="p-4 rounded-2xl bg-white/10 border border-white/20 inline-block font-mono">
-              <span className="text-xs text-slate-300 block mb-1">KODE MANUAL ALTERNATIF:</span>
-              <span className="text-3xl font-black text-pink-400 tracking-widest">
-                {fullscreenQrSession.code}
-              </span>
             </div>
           </div>
         </div>

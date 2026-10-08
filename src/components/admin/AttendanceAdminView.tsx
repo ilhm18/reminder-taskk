@@ -30,8 +30,10 @@ import {
   LayoutGrid,
   Check,
   FileText,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod } from '../../types';
 import { getRollingTokenDetails } from '../../utils/attendanceToken';
 
@@ -53,8 +55,12 @@ export const AttendanceAdminView: React.FC = () => {
     showToast,
   } = useApp();
 
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
+
   // Filter sessions for current class
   const targetClassId = currentClass?.id || currentUser?.classId || '';
+  const [selectedProofRecord, setSelectedProofRecord] = useState<AttendanceRecord | null>(null);
   const classSessions = useMemo(() => {
     return attendanceSessions.filter((s) => {
       if (!targetClassId) return true;
@@ -324,16 +330,16 @@ export const AttendanceAdminView: React.FC = () => {
 
     // Ringkasan Statistik
     lines.push('RINGKASAN KEHADIRAN SESI');
-    lines.push(`"Total Siswa","${totalStudents} Siswa"`);
-    lines.push(`"Jumlah Hadir","${hadirCount} Siswa"`);
-    lines.push(`"Jumlah Izin","${izinCount} Siswa"`);
-    lines.push(`"Jumlah Sakit","${sakitCount} Siswa"`);
-    lines.push(`"Alpa / Belum Hadir","${alpaCount} Siswa"`);
+    lines.push(`"Total ${terms.memberTitlePlural}","${totalStudents} ${terms.memberTitlePlural}"`);
+    lines.push(`"Jumlah Hadir","${hadirCount} ${terms.memberTitlePlural}"`);
+    lines.push(`"Jumlah Izin","${izinCount} ${terms.memberTitlePlural}"`);
+    lines.push(`"Jumlah Sakit","${sakitCount} ${terms.memberTitlePlural}"`);
+    lines.push(`"Alpa / Belum Hadir","${alpaCount} ${terms.memberTitlePlural}"`);
     lines.push(`"Persentase Kehadiran","${attendanceRate}%"`);
     lines.push('');
 
-    // Tabel Detail Siswa
-    lines.push('"No","Tanggal Sesi","Nama Sesi","Mata Pelajaran","Nama Siswa","Email Siswa","Status Presensi","Waktu Check-In","Metode Presensi","Catatan / Alasan"');
+    // Tabel Detail Anggota
+    lines.push(`"No","Tanggal Sesi","Nama Sesi","${terms.courseLabel}","Nama ${terms.memberTitle}","Status Presensi","Waktu Check-In","Metode Presensi","Catatan / Alasan"`);
 
     sessionAttendanceList.forEach((item, index) => {
       const rec = item.record;
@@ -344,12 +350,12 @@ export const AttendanceAdminView: React.FC = () => {
           ? 'Scan Kode QR'
           : rec.verificationMethod === 'permission_request'
           ? 'Pengajuan Izin/Sakit'
-          : 'Manual Guru'
+          : 'Manual ' + terms.educatorTitle
         : '-';
       const noteText = rec?.note ? rec.note.replace(/"/g, '""') : (item.status === 'alpa' ? 'Belum melakukan presensi' : '-');
 
       lines.push(
-        `${index + 1},"${sessionDate}","${sessionTitle.replace(/"/g, '""')}","${sessionSubject.replace(/"/g, '""')}","${item.name.replace(/"/g, '""')}","${(item.email || '-').replace(/"/g, '""')}","${statusText}","${timeText}","${methodText}","${noteText}"`
+        `${index + 1},"${sessionDate}","${sessionTitle.replace(/"/g, '""')}","${sessionSubject.replace(/"/g, '""')}","${item.name.replace(/"/g, '""')}","${statusText}","${timeText}","${methodText}","${noteText}"`
       );
     });
 
@@ -420,9 +426,9 @@ export const AttendanceAdminView: React.FC = () => {
 
       lines.push('====================================================================================================');
       lines.push(`"SESI KE-${sIdx + 1} | TANGGAL SESI: ${sess.date} | ${sess.title.replace(/"/g, '""')} | Mapel: ${(sess.subject || 'Umum').replace(/"/g, '""')}"`);
-      lines.push(`"Status: ${sess.isActive ? 'Aktif' : 'Ditutup'} | Hadir: ${hCount} Siswa | Izin: ${iCount} | Sakit: ${sCount} | Alpa: ${aCount} (Total Siswa: ${list.length})"`);
+      lines.push(`"Status: ${sess.isActive ? 'Aktif' : 'Ditutup'} | Hadir: ${hCount} ${terms.memberTitlePlural} | Izin: ${iCount} | Sakit: ${sCount} | Alpa: ${aCount} (Total ${terms.memberTitlePlural}: ${list.length})"`);
       lines.push('====================================================================================================');
-      lines.push('"No","Tanggal Sesi","Nama Sesi","Mata Pelajaran","Nama Siswa","Email Siswa","Status Presensi","Waktu Check-In","Metode Presensi","Catatan / Alasan"');
+      lines.push(`"No","Tanggal Sesi","Nama Sesi","Mata Pelajaran","Nama ${terms.memberTitle}","Status Presensi","Waktu Check-In","Metode Presensi","Catatan / Alasan"`);
 
       list.forEach((stu, idx) => {
         const rec = stu.record;
@@ -433,12 +439,12 @@ export const AttendanceAdminView: React.FC = () => {
             ? 'Scan Kode QR'
             : rec.verificationMethod === 'permission_request'
             ? 'Pengajuan Izin'
-            : 'Manual Guru'
+            : 'Manual ' + terms.educatorTitle
           : '-';
         const noteText = rec?.note ? rec.note.replace(/"/g, '""') : (stu.status === 'alpa' ? 'Belum absen' : '-');
 
         lines.push(
-          `${idx + 1},"${sess.date}","${sess.title.replace(/"/g, '""')}","${(sess.subject || 'Umum').replace(/"/g, '""')}","${stu.name.replace(/"/g, '""')}","${(stu.email || '-').replace(/"/g, '""')}","${statusText}","${timeText}","${methodText}","${noteText}"`
+          `${idx + 1},"${sess.date}","${sess.title.replace(/"/g, '""')}","${(sess.subject || 'Umum').replace(/"/g, '""')}","${stu.name.replace(/"/g, '""')}","${statusText}","${timeText}","${methodText}","${noteText}"`
         );
       });
 
@@ -482,7 +488,7 @@ export const AttendanceAdminView: React.FC = () => {
     );
 
     const sessionCols = sortedSessions.map((s) => `"[${s.date}] ${s.title.replace(/"/g, '""')}"`).join(',');
-    lines.push(`"No","Nama Siswa","Email Siswa",${sessionCols},"Total Hadir","Total Izin","Total Sakit","Total Alpa","% Kehadiran"`);
+    lines.push(`"No","Nama ${terms.memberTitle}",${sessionCols},"Total Hadir","Total Izin","Total Sakit","Total Alpa","% Kehadiran"`);
 
     classStudents.forEach((stu, index) => {
       let hTotal = 0;
@@ -504,7 +510,7 @@ export const AttendanceAdminView: React.FC = () => {
       const rate = totalSess > 0 ? Math.round(((hTotal + iTotal + sTotal) / totalSess) * 100) : 0;
 
       lines.push(
-        `${index + 1},"${stu.name.replace(/"/g, '""')}","${(stu.email || '-').replace(/"/g, '""')}",${sessionStatuses.join(',')},"${hTotal}","${iTotal}","${sTotal}","${aTotal}","${rate}%"`
+        `${index + 1},"${stu.name.replace(/"/g, '""')}",${sessionStatuses.join(',')},"${hTotal}","${iTotal}","${sTotal}","${aTotal}","${rate}%"`
       );
     });
 
@@ -514,13 +520,13 @@ export const AttendanceAdminView: React.FC = () => {
     const link = document.createElement('a');
     link.href = url;
     const cleanClassName = className.replace(/[^a-zA-Z0-9_-]/g, '_');
-    link.download = `Matriks_Presensi_Siswa_${cleanClassName}.csv`;
+    link.download = `Matriks_Presensi_${terms.memberTitle}_${cleanClassName}.csv`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
 
-    showToast('Matriks kehadiran siswa berhasil diunduh ke CSV!', 'success');
+    showToast(`Matriks kehadiran ${terms.memberTitle.toLowerCase()} berhasil diunduh ke CSV!`, 'success');
   };
 
   return (
@@ -543,7 +549,7 @@ export const AttendanceAdminView: React.FC = () => {
               Presensi &amp; Kode QR Kelas Real-Time
             </h2>
             <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
-              Sistem presensi kelas berbasis <strong>Kode QR Dinamis Terverifikasi</strong>, pencatatan kehadiran otomatis per siswa, dan verifikasi geolokasi kelas secara presisi.
+              Sistem presensi kelas berbasis <strong>Kode QR Dinamis Terverifikasi</strong>, pencatatan kehadiran otomatis per {terms.memberTitle.toLowerCase()}, dan verifikasi geolokasi kelas secara presisi.
             </p>
           </div>
 
@@ -585,7 +591,7 @@ export const AttendanceAdminView: React.FC = () => {
             }`}
           >
             <Users className="w-4 h-4" />
-            <span>Rekap Kehadiran Siswa</span>
+            <span>Rekap Kehadiran {terms.memberTitlePlural}</span>
             {currentRecords.length > 0 && (
               <span className="px-1.5 py-0.2 bg-white/20 text-white rounded-full text-[10px]">
                 {currentRecords.length}
@@ -634,7 +640,7 @@ export const AttendanceAdminView: React.FC = () => {
           <div>
             <h3 className="text-base font-bold text-white mb-1">Belum Ada Sesi Presensi Dibuka</h3>
             <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-              Buka sesi presensi baru sekarang untuk menampilkan kode QR digital di proyektor kelas agar siswa dapat langsung scan absensi.
+              Buka sesi presensi baru sekarang untuk menampilkan kode QR digital di proyektor kelas agar {terms.memberTitlePlural.toLowerCase()} dapat langsung scan absensi.
             </p>
           </div>
           <button
@@ -734,7 +740,7 @@ export const AttendanceAdminView: React.FC = () => {
                       <XCircle className="w-12 h-12 text-slate-500 mx-auto mb-2" />
                       <h4 className="text-sm font-bold text-white">Sesi Presensi Telah Ditutup</h4>
                       <p className="text-xs text-slate-400">
-                        Kode QR tidak lagi aktif. Klik tombol "Buka Kembali Sesi" jika ada siswa susulan yang perlu scan.
+                        Kode QR tidak lagi aktif. Klik tombol "Buka Kembali Sesi" jika ada {terms.memberTitle.toLowerCase()} susulan yang perlu scan.
                       </p>
                     </div>
                   )}
@@ -754,10 +760,10 @@ export const AttendanceAdminView: React.FC = () => {
                     <div className="p-3 rounded-xl bg-[#140e2d] border border-[#281c4e] text-xs">
                       <div className="flex items-center gap-1.5 text-purple-400 font-bold mb-1">
                         <Smartphone className="w-3.5 h-3.5" />
-                        <span>1 Siswa 1 Presensi</span>
+                        <span>1 {terms.memberTitle} 1 Presensi</span>
                       </div>
                       <p className="text-[10px] text-slate-400">
-                        Siswa terkunci hanya dapat melakukan presensi satu kali per sesi.
+                        {terms.memberTitle} terkunci hanya dapat melakukan presensi satu kali per sesi.
                       </p>
                     </div>
 
@@ -813,7 +819,7 @@ export const AttendanceAdminView: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                       <span className="text-xs font-bold text-white">
-                        Siswa Yang Baru Saja Masuk ({currentRecords.length})
+                        {terms.memberTitle} Yang Baru Saja Masuk ({currentRecords.length})
                       </span>
                     </div>
                     <span className="text-[10px] text-slate-400 font-mono">Live Sync</span>
@@ -821,7 +827,7 @@ export const AttendanceAdminView: React.FC = () => {
 
                   {currentRecords.length === 0 ? (
                     <div className="py-8 text-center text-slate-500 text-xs">
-                      Menunggu siswa melakukan scan barcode...
+                      Menunggu {terms.memberTitle.toLowerCase()} melakukan scan barcode...
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-96 overflow-y-auto scrollbar-thin pr-1">
@@ -878,7 +884,7 @@ export const AttendanceAdminView: React.FC = () => {
                       Pilih Sesi &amp; Tanggal Presensi Kelas
                     </h3>
                     <p className="text-[11px] text-slate-400 mt-0.5">
-                      Klik salah satu sesi di bawah untuk melihat rekapitulasi siswa per sesi atau lihat matriks gabungan.
+                      Klik salah satu sesi di bawah untuk melihat rekapitulasi {terms.memberTitlePlural.toLowerCase()} per sesi atau lihat matriks gabungan.
                     </p>
                   </div>
 
@@ -1038,7 +1044,7 @@ export const AttendanceAdminView: React.FC = () => {
                           type="text"
                           value={searchMember}
                           onChange={(e) => setSearchMember(e.target.value)}
-                          placeholder="Cari nama siswa..."
+                          placeholder={`Cari nama ${terms.memberTitle.toLowerCase()}...`}
                           className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-[#191336] border border-[#2d2052] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-pink-500"
                         />
                       </div>
@@ -1083,7 +1089,7 @@ export const AttendanceAdminView: React.FC = () => {
                         type="button"
                         onClick={handleExportMatrixCsv}
                         className="px-3 py-2 rounded-xl bg-[#1f173d] hover:bg-[#2b1f52] border border-[#3b2a68] text-slate-300 hover:text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-colors"
-                        title="Download rekap matriks presensi siswa x tanggal sesi"
+                        title={`Download rekap matriks presensi ${terms.memberTitle.toLowerCase()} x tanggal sesi`}
                       >
                         <Table className="w-3.5 h-3.5 text-pink-300" />
                         <span>Matriks CSV</span>
@@ -1098,12 +1104,13 @@ export const AttendanceAdminView: React.FC = () => {
                         <tr className="border-b border-[#261d4a] bg-[#181235] text-slate-300 font-bold uppercase text-[10px] tracking-wider">
                           <th className="p-3.5 pl-5 w-12 text-center">No</th>
                           <th className="p-3.5">Tanggal Sesi</th>
-                          <th className="p-3.5">Nama Siswa</th>
+                          <th className="p-3.5">Nama {terms.memberTitle}</th>
                           <th className="p-3.5">Status Presensi</th>
                           <th className="p-3.5">Waktu Check-in</th>
                           <th className="p-3.5">Metode</th>
+                          <th className="p-3.5">Bukti / Lampiran</th>
                           <th className="p-3.5">Catatan / Alasan</th>
-                          <th className="p-3.5 pr-5 text-right">Aksi Guru</th>
+                          <th className="p-3.5 pr-5 text-right">Aksi {terms.educatorTitle}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#1e173a]">
@@ -1183,17 +1190,33 @@ export const AttendanceAdminView: React.FC = () => {
                                   {rec ? new Date(rec.checkInTime).toLocaleTimeString('id-ID') : '-'}
                                 </td>
 
-                                <td className="p-3.5 text-slate-400 text-xs">
+                                 <td className="p-3.5 text-slate-400 text-xs">
                                   {rec ? (
                                     <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">
                                       {rec.verificationMethod === 'qr_scan'
                                         ? 'Scan Kode QR'
                                         : rec.verificationMethod === 'permission_request'
                                         ? 'Pengajuan Izin'
-                                        : 'Manual Guru'}
+                                        : `Manual ${terms.educatorTitle}`}
                                     </span>
                                   ) : (
                                     '-'
+                                  )}
+                                </td>
+
+                                <td className="p-3.5">
+                                  {rec?.proofFileUrl ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedProofRecord(rec)}
+                                      className="px-2.5 py-1 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 text-[10px] font-bold border border-pink-500/30 flex items-center gap-1 transition-colors cursor-pointer"
+                                      title="Lihat lampiran bukti foto / surat"
+                                    >
+                                      <ImageIcon className="w-3.5 h-3.5" />
+                                      <span>Lihat Bukti</span>
+                                    </button>
+                                  ) : (
+                                    <span className="text-slate-500 text-[10px]">-</span>
                                   )}
                                 </td>
 
@@ -1207,7 +1230,7 @@ export const AttendanceAdminView: React.FC = () => {
                                       type="button"
                                       onClick={() => deleteAttendanceRecord(rec.id)}
                                       className="p-1 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 cursor-pointer transition-colors"
-                                      title="Reset / hapus rekaman siswa ini"
+                                      title={`Reset / hapus rekaman ${terms.memberTitle.toLowerCase()} ini`}
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
                                     </button>
@@ -1227,9 +1250,9 @@ export const AttendanceAdminView: React.FC = () => {
                 <div className="space-y-4 animate-in fade-in duration-200">
                   <div className="p-4 rounded-2xl bg-[#140f2b] border border-[#271d49] flex flex-col sm:flex-row items-center justify-between gap-3">
                     <div>
-                      <h4 className="text-xs font-black text-white">Matriks Kehadiran Siswa Seluruh Tanggal Sesi</h4>
+                      <h4 className="text-xs font-black text-white">Matriks Kehadiran {terms.memberTitlePlural} Seluruh Tanggal Sesi</h4>
                       <p className="text-[11px] text-slate-400 mt-0.5">
-                        Rekap komparasi kehadiran seluruh siswa untuk setiap tanggal pertemuan kelas.
+                        Rekap komparasi kehadiran seluruh {terms.memberTitlePlural.toLowerCase()} untuk setiap tanggal pertemuan kelas.
                       </p>
                     </div>
 
@@ -1250,7 +1273,7 @@ export const AttendanceAdminView: React.FC = () => {
                       <thead>
                         <tr className="border-b border-[#261d4a] bg-[#181235] text-slate-300 font-bold uppercase text-[10px] tracking-wider">
                           <th className="p-3.5 pl-5 w-12 text-center sticky left-0 bg-[#181235] z-10">No</th>
-                          <th className="p-3.5 min-w-44 sticky left-12 bg-[#181235] z-10">Nama Siswa</th>
+                          <th className="p-3.5 min-w-44 sticky left-12 bg-[#181235] z-10">Nama {terms.memberTitle}</th>
                           {classSessions.map((s) => (
                             <th key={s.id} className="p-3.5 text-center min-w-28 font-mono">
                               <span className="block text-pink-300 font-bold">{s.date}</span>
@@ -1368,8 +1391,8 @@ export const AttendanceAdminView: React.FC = () => {
                       )}
 
                       <div className="p-3 rounded-2xl bg-[#0f0c22] border border-[#231a40] text-xs flex items-center justify-between mb-4">
-                        <span className="text-slate-400">Total Siswa Tercatat:</span>
-                        <span className="font-mono font-bold text-emerald-400">{sessRecords.length} Siswa</span>
+                        <span className="text-slate-400">Total {terms.memberTitlePlural} Tercatat:</span>
+                        <span className="font-mono font-bold text-emerald-400">{sessRecords.length} {terms.memberTitlePlural}</span>
                       </div>
                     </div>
 
@@ -1435,7 +1458,7 @@ export const AttendanceAdminView: React.FC = () => {
                 {sessionToDelete.subject && <span>• Mapel: {sessionToDelete.subject}</span>}
               </div>
               <p className="text-slate-400 pt-1 text-[11px] leading-relaxed">
-                Seluruh data rekapitulasi kehadiran siswa pada sesi tanggal ini akan ikut terhapus.
+                Seluruh data rekapitulasi kehadiran {terms.memberTitlePlural.toLowerCase()} pada sesi tanggal ini akan ikut terhapus.
               </p>
             </div>
 
@@ -1587,6 +1610,79 @@ export const AttendanceAdminView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL LIHAT BUKTI FOTO / SURAT */}
+      {selectedProofRecord && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#140f2b] border border-[#2d2054] rounded-3xl p-5 sm:p-6 shadow-2xl relative">
+            <div className="flex items-center justify-between pb-4 border-b border-[#261b47]">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-pink-500/20 border border-pink-500/30 text-pink-400 flex items-center justify-center">
+                  <ImageIcon className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-white text-sm">Bukti Presensi: {selectedProofRecord.studentName}</h3>
+                  <p className="text-[11px] text-slate-400">
+                    Status: <strong className="uppercase text-pink-300">{selectedProofRecord.status}</strong> • {selectedProofRecord.proofFileName || 'Lampiran'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setSelectedProofRecord(null)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-[#231742] transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {selectedProofRecord.proofFileUrl && selectedProofRecord.proofFileUrl.startsWith('data:image/') ? (
+                <div className="max-h-[60vh] overflow-hidden rounded-2xl border border-[#2b1f4e] bg-black flex items-center justify-center p-2">
+                  <img
+                    src={selectedProofRecord.proofFileUrl}
+                    alt={`Bukti Presensi ${terms.memberTitle}`}
+                    className="max-h-[55vh] w-auto object-contain rounded-xl"
+                  />
+                </div>
+              ) : selectedProofRecord.proofFileUrl ? (
+                <div className="p-6 rounded-2xl bg-[#1b143a] border border-[#312359] text-center space-y-3">
+                  <FileText className="w-10 h-10 text-pink-400 mx-auto" />
+                  <p className="text-xs text-white font-bold">{selectedProofRecord.proofFileName || 'Dokumen Bukti'}</p>
+                  <a
+                    href={selectedProofRecord.proofFileUrl}
+                    download={selectedProofRecord.proofFileName || 'Bukti_Presensi'}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-bold text-xs shadow-md transition-all"
+                  >
+                    <Download className="w-4 h-4" />
+                    <span>Unduh / Buka Dokumen</span>
+                  </a>
+                </div>
+              ) : (
+                <div className="p-6 text-center text-slate-400 text-xs">Tidak ada lampiran berkas</div>
+              )}
+
+              {selectedProofRecord.note && (
+                <div className="p-3 rounded-xl bg-[#191238] border border-[#2c1f4e] text-xs">
+                  <span className="font-bold text-slate-300 block mb-0.5">Catatan {terms.memberTitle}:</span>
+                  <p className="text-slate-300 italic">{selectedProofRecord.note}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-[#261b47] flex justify-end">
+              <button
+                type="button"
+                onClick={() => setSelectedProofRecord(null)}
+                className="px-4 py-2 rounded-xl bg-[#1c143d] hover:bg-[#281c54] text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
           </div>
         </div>
       )}

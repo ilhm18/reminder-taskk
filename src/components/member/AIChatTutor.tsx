@@ -36,7 +36,7 @@ export interface ChatSession {
 }
 
 export const AIChatTutor: React.FC = () => {
-  const { currentUser, currentClass, tasks, showToast } = useApp();
+  const { currentUser, currentClass, tasks, systemSettings, showToast } = useApp();
 
   // Storage key is strictly isolated per-user so history is NEVER visible to others
   const getStorageKey = () => {
@@ -524,11 +524,15 @@ export const AIChatTutor: React.FC = () => {
           <div className="flex items-center gap-1.5 sm:gap-2">
             {/* Assistant Kelas Component */}
             <div
-              title="Assistant Kelas Aktif & Siap Membantu"
-              className="hidden lg:flex px-2.5 sm:px-3 py-1.5 rounded-xl bg-gradient-to-r from-pink-500/20 via-purple-600/20 to-indigo-600/20 border border-pink-500/30 text-pink-300 text-xs font-bold items-center gap-1.5 shadow-sm select-none"
+              title={systemSettings?.isAiMaintenance ? "AI Assistant Sedang Maintenance" : "Assistant Kelas Aktif & Siap Membantu"}
+              className={`hidden lg:flex px-2.5 sm:px-3 py-1.5 rounded-xl border text-xs font-bold items-center gap-1.5 shadow-sm select-none ${
+                systemSettings?.isAiMaintenance
+                  ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
+                  : 'bg-gradient-to-r from-pink-500/20 via-purple-600/20 to-indigo-600/20 border-pink-500/30 text-pink-300'
+              }`}
             >
-              <Zap className="w-3.5 h-3.5 text-amber-300 shrink-0" />
-              <span>Assistant Kelas</span>
+              <Zap className={`w-3.5 h-3.5 shrink-0 ${systemSettings?.isAiMaintenance ? 'text-amber-400 animate-pulse' : 'text-amber-300'}`} />
+              <span>{systemSettings?.isAiMaintenance ? 'Maintenance' : 'Assistant Kelas'}</span>
             </div>
 
             {/* All-in-One Model Badge */}

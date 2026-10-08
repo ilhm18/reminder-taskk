@@ -151,17 +151,19 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   email TEXT,
   password TEXT DEFAULT 'password123',
   role TEXT NOT NULL CHECK (role IN ('owner', 'admin', 'member')),
+  educator_type TEXT DEFAULT 'guru',
   class_id TEXT,
   class_name TEXT,
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Migrasi Keamanan: Hapus constraint dan index unique email agar tidak konflik
+-- Migrasi Keamanan & Skema: Hapus constraint dan tambahkan kolom educator_type
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_email_key;
 DROP INDEX IF EXISTS public.profiles_email_unique_idx;
 DROP INDEX IF EXISTS profiles_email_idx;
 DROP INDEX IF EXISTS public.profiles_email_idx;
+ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS educator_type TEXT DEFAULT 'guru';
 
 -- Seed Akun Owner Utama (Terhubung langsung dengan database SQL)
 INSERT INTO public.profiles (id, name, email, password, role, status)
@@ -175,11 +177,14 @@ CREATE TABLE IF NOT EXISTS public.classes (
   name TEXT NOT NULL,
   admin_id TEXT NOT NULL,
   admin_name TEXT NOT NULL,
+  educator_type TEXT DEFAULT 'guru',
   description TEXT,
   member_count INT DEFAULT 0,
   access_count_today INT DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE IF EXISTS public.classes ADD COLUMN IF NOT EXISTS educator_type TEXT DEFAULT 'guru';
 
 -- 3. Buat Tabel Tugas
 CREATE TABLE IF NOT EXISTS public.tasks (
@@ -267,6 +272,12 @@ CREATE TABLE IF NOT EXISTS public.schedules (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Kompatibilitas Kolom Jadwal
+ALTER TABLE IF EXISTS public.schedules ADD COLUMN IF NOT EXISTS room_or_link TEXT;
+ALTER TABLE IF EXISTS public.schedules ADD COLUMN IF NOT EXISTS color_badge TEXT;
+ALTER TABLE IF EXISTS public.schedules ADD COLUMN IF NOT EXISTS room TEXT;
+ALTER TABLE IF EXISTS public.schedules ADD COLUMN IF NOT EXISTS color TEXT;
+
 -- 7. Buat Tabel Anonymous Wall (Pesan Anonim Kelas)
 CREATE TABLE IF NOT EXISTS public.anonymous_wall (
   id TEXT PRIMARY KEY,
@@ -283,6 +294,11 @@ CREATE TABLE IF NOT EXISTS public.anonymous_wall (
   is_pinned BOOLEAN DEFAULT FALSE,
   reply_from_admin TEXT,
   reply_at TIMESTAMPTZ,
+  sender_id TEXT,
+  sender_name TEXT,
+  sender_email TEXT,
+  sender_username TEXT,
+  sender_role TEXT DEFAULT 'member',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -302,11 +318,29 @@ CREATE TABLE IF NOT EXISTS public.anonymous_messages (
   is_pinned BOOLEAN DEFAULT FALSE,
   reply_from_admin TEXT,
   reply_at TIMESTAMPTZ,
+  sender_id TEXT,
+  sender_name TEXT,
+  sender_email TEXT,
+  sender_username TEXT,
+  sender_role TEXT DEFAULT 'member',
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 ALTER TABLE public.anonymous_wall ADD COLUMN IF NOT EXISTS replies JSONB DEFAULT '[]'::jsonb;
 ALTER TABLE public.anonymous_messages ADD COLUMN IF NOT EXISTS replies JSONB DEFAULT '[]'::jsonb;
+
+-- Kolom Identitas Pengirim Asli untuk Moderasi Owner
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_id TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_name TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_email TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_username TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_role TEXT DEFAULT 'member';
+
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_id TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_name TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_email TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_username TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_role TEXT DEFAULT 'member';
 
 -- 8. Buat Tabel Kritik & Saran (Feedback)
 CREATE TABLE IF NOT EXISTS public.feedbacks (
@@ -627,6 +661,8 @@ BEGIN
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.feedbacks; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.owner_chats; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings; EXCEPTION WHEN duplicate_object THEN NULL; END;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.class_chats; EXCEPTION WHEN duplicate_object THEN NULL; END;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.class_access_logs; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.activity_logs; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.forum_posts; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.question_banks; EXCEPTION WHEN duplicate_object THEN NULL; END;

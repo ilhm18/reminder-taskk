@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Megaphone, Send, Shield, Users, Building2, X, Sparkles, FileText } from 'lucide-react';
+import { Megaphone, Send, Shield, Users, Building2, X, Sparkles, FileText, Copy, Check } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 interface BroadcastModalProps {
   isOpen: boolean;
@@ -64,6 +65,9 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
     showToast,
   } = useApp();
 
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
+
   const [title, setTitle] = useState('');
   const [message, setMessage] = useState('');
   const [targetType, setTargetType] = useState<'all' | 'admins_only' | 'class_members'>(
@@ -73,16 +77,18 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
     currentClass?.id || classes[0]?.id || ''
   );
   const [isSending, setIsSending] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
 
-  const handleWhatsAppBroadcast = () => {
-    if (!title.trim() || !message.trim()) {
-      showToast('Harap isi judul dan pesan terlebih dahulu untuk dikirim ke WhatsApp.', 'warn');
+  const handleCopyBroadcastText = () => {
+    if (!title.trim() && !message.trim()) {
+      showToast('Harap isi judul atau pesan terlebih dahulu.', 'warn');
       return;
     }
-    const waText = `*📢 PENGUMUMAN REMINDTASK*\n*${title.trim()}*\n\n${message.trim()}\n\n_Kelas: ${currentClass?.name || 'Semua Kelas'}_\n_Waktu: ${new Date().toLocaleString('id-ID')}_`;
-    const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(waText)}`;
-    window.open(waUrl, '_blank');
-    showToast('Membuka WhatsApp untuk mengirim broadcast!', 'success');
+    const fullText = `*📢 PENGUMUMAN REMINDTASK*\n*${title.trim()}*\n\n${message.trim()}\n\n_Waktu: ${new Date().toLocaleString('id-ID')}_`;
+    navigator.clipboard.writeText(fullText);
+    setIsCopied(true);
+    showToast('Teks pengumuman berhasil disalin ke clipboard!', 'success');
+    setTimeout(() => setIsCopied(false), 2000);
   };
 
   if (!isOpen) return null;
@@ -206,7 +212,7 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
                     </div>
                     <div>
                       <div className="text-xs font-bold text-white">Seluruh User Sistem</div>
-                      <div className="text-[10px] text-slate-400">Siswa, Admin & Owner (Global Broadcast)</div>
+                      <div className="text-[10px] text-slate-400">{terms.memberTitle}, Admin &amp; Owner (Global Broadcast)</div>
                     </div>
                   </div>
                   {targetType === 'all' && (
@@ -228,7 +234,7 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
                       <Shield className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-bold text-white">Khusus Seluruh Admin</div>
+                      <div className="text-xs font-bold text-white">Khusus Seluruh Admin ({terms.educatorTitle})</div>
                       <div className="text-[10px] text-slate-400">Hanya terkirim ke akun beranperan Admin</div>
                     </div>
                   </div>
@@ -251,7 +257,7 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
                       <Building2 className="w-4 h-4" />
                     </div>
                     <div>
-                      <div className="text-xs font-bold text-white">Siswa Kelas Spesifik</div>
+                      <div className="text-xs font-bold text-white">{terms.memberTitle} / Anggota Kelas Spesifik</div>
                       <div className="text-[10px] text-slate-400">Targetkan anggota kelas tertentu</div>
                     </div>
                   </div>
@@ -286,7 +292,7 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
                     Anggota Kelas: {currentClass?.name || 'Kelas Saya'}
                   </div>
                   <div className="text-[10px] text-pink-300">
-                    Broadcast disiarkan secara realtime ke seluruh siswa di kelas ini (Kode: {currentClass?.code || '------'})
+                    Broadcast disiarkan secara realtime ke seluruh {terms.memberTitlePlural.toLowerCase()} di kelas ini (Kode: {currentClass?.code || '------'})
                   </div>
                 </div>
               </div>
@@ -349,14 +355,22 @@ export const BroadcastModal: React.FC<BroadcastModalProps> = ({ isOpen, onClose 
           </div>
 
           {/* Submit Actions */}
-          <div className="pt-3 flex items-center justify-between gap-3 border-t border-[#261f42]">
-            <button
-              type="button"
-              onClick={handleWhatsAppBroadcast}
-              className="px-4 py-2.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 hover:text-emerald-200 text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-sm"
-            >
-              <span>💬 Kirim ke WhatsApp</span>
-            </button>
+          <div className="pt-3 flex flex-wrap items-center justify-between gap-3 border-t border-[#261f42]">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCopyBroadcastText}
+                className="px-3.5 py-2 rounded-xl bg-[#1d1738] hover:bg-[#2a2150] border border-[#342757] text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                title="Salin teks pengumuman ke clipboard"
+              >
+                {isCopied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{isCopied ? 'Tersalin!' : 'Salin Teks'}</span>
+              </button>
+              <span className="hidden sm:inline-flex items-center gap-1.5 text-[11px] text-emerald-400 font-semibold bg-emerald-500/10 px-2.5 py-1 rounded-lg border border-emerald-500/20">
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span>Langsung In-App &amp; Push Notif</span>
+              </span>
+            </div>
             <div className="flex items-center gap-2">
               <button
                 type="button"

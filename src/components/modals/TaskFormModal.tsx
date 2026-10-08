@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertCircle, AlertTriangle, CalendarPlus, CheckSquare, Clock, FileText, Layers, Sparkles, Tag, X } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Task, TaskCategory, TaskPriority } from '../../types';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 interface TaskFormModalProps {
   isOpen: boolean;
@@ -75,7 +76,10 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
   initialTask,
   targetDate,
 }) => {
-  const { addTask, updateTask, classes, currentClass, currentRole } = useApp();
+  const { addTask, updateTask, classes, currentClass, currentRole, currentUser } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   const [title, setTitle] = useState(initialTask?.title || '');
   const [description, setDescription] = useState(initialTask?.description || '');
@@ -282,10 +286,10 @@ export const TaskFormModal: React.FC<TaskFormModalProps> = ({
               <div className="p-3 rounded-xl bg-red-500/15 border border-red-500/30 text-xs text-red-300 space-y-1.5">
                 <div className="flex items-center gap-1.5 font-bold">
                   <AlertTriangle className="w-4 h-4 text-red-400 shrink-0" />
-                  <span>Tugas Telah Berakhir (Terkunci untuk Siswa)</span>
+                  <span>Tugas Telah Berakhir (Terkunci untuk {terms.memberTitle})</span>
                 </div>
                 <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Tambahkan durasi waktu baru di bawah agar pengerjaan dan pengunggahan tugas terbuka kembali untuk siswa.
+                  Tambahkan durasi waktu baru di bawah agar pengerjaan dan pengunggahan tugas terbuka kembali untuk {terms.memberTitle.toLowerCase()}.
                 </p>
               </div>
             )}

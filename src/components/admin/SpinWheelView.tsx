@@ -19,6 +19,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 // Sound effect synthesizer for spin wheel
 function playSpinSound(type: 'tick' | 'winner' | 'shuffle') {
@@ -85,6 +86,8 @@ const DEFAULT_SAMPLE_NAMES: string[] = [];
 
 export const SpinWheelView: React.FC = () => {
   const { currentClass, users, showToast, addActivityLog, currentUser } = useApp();
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
   const [mode, setMode] = useState<'spin' | 'groups'>('spin');
 
   const historyStorageKey = `rt_spin_history_${currentClass?.id || 'default'}`;
@@ -199,10 +202,10 @@ export const SpinWheelView: React.FC = () => {
     const classMembers = users.filter((u) => u.classId === currentClass?.id && u.role === 'member');
     if (classMembers.length === 0) {
       setNamesText('');
-      showToast('Belum ada siswa terdaftar di kelas ini.', 'info');
+      showToast(`Belum ada ${terms.memberTitle.toLowerCase()} terdaftar di kelas ini.`, 'info');
     } else {
       setNamesText(classMembers.map((m) => m.name).join('\n'));
-      showToast(`Berhasil memuat ${classMembers.length} siswa dari database kelas ${currentClass?.name}.`, 'success');
+      showToast(`Berhasil memuat ${classMembers.length} ${terms.memberTitlePlural.toLowerCase()} dari database kelas ${currentClass?.name}.`, 'success');
     }
   };
 
@@ -213,7 +216,7 @@ export const SpinWheelView: React.FC = () => {
     const activeItems = parsedNames.slice(0, 36);
     if (isSpinning || activeItems.length < 2) {
       if (activeItems.length < 2) {
-        showToast('Masukkan minimal 2 nama siswa untuk memutar roda spin!', 'warn');
+        showToast(`Masukkan minimal 2 nama ${terms.memberTitle.toLowerCase()} untuk memutar roda spin!`, 'warn');
       }
       return;
     }
@@ -286,7 +289,7 @@ export const SpinWheelView: React.FC = () => {
   // GROUP GENERATOR LOGIC
   const handleGenerateGroups = () => {
     if (parsedNames.length === 0) {
-      showToast('Masukkan daftar nama siswa terlebih dahulu.', 'warn');
+      showToast(`Masukkan daftar nama ${terms.memberTitle.toLowerCase()} terlebih dahulu.`, 'warn');
       return;
     }
 
@@ -339,17 +342,17 @@ export const SpinWheelView: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-pink-50 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300 font-bold text-[10px] uppercase tracking-wider border border-pink-200 dark:border-pink-500/30">
-                  Tool Guru &amp; Admin
+                  Tool {terms.educatorTitle} &amp; Admin
                 </span>
                 <span className="text-xs font-mono text-purple-700 dark:text-purple-300 font-bold">
-                  {parsedNames.length} Siswa Terdaftar
+                  {parsedNames.length} {terms.memberTitlePlural} Terdaftar
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1">
-                Roda Spin &amp; Acak Kelompok Siswa
+                Roda Spin &amp; Acak Kelompok {terms.memberTitlePlural}
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 font-medium">
-                Putar roda undian giliran presentasi, kuis interaktif, atau bagi 40+ siswa ke dalam kelompok otomatis!
+                Putar roda undian giliran presentasi, kuis interaktif, atau bagi 40+ {terms.memberTitlePlural.toLowerCase()} ke dalam kelompok otomatis!
               </p>
             </div>
           </div>
@@ -390,7 +393,7 @@ export const SpinWheelView: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-[#231d3f] mb-3">
               <div className="flex items-center gap-2">
                 <Users className="w-4 h-4 text-pink-400" />
-                <h3 className="font-bold text-white text-sm">Daftar Nama Siswa</h3>
+                <h3 className="font-bold text-white text-sm">Daftar Nama {terms.memberTitle}</h3>
               </div>
               <span className="px-2 py-0.5 rounded-full bg-[#1e173e] text-purple-300 font-mono text-xs font-bold">
                 {parsedNames.length} Orang
@@ -398,7 +401,7 @@ export const SpinWheelView: React.FC = () => {
             </div>
 
             <p className="text-[11px] text-slate-400 mb-3">
-              Ketik atau tempel nama siswa (satu baris untuk setiap nama).
+              Ketik atau tempel nama {terms.memberTitle.toLowerCase()} (satu baris untuk setiap nama).
             </p>
 
             <textarea
@@ -664,7 +667,7 @@ export const SpinWheelView: React.FC = () => {
                     <span>Generator Pembagian Kelompok</span>
                   </h3>
                   <span className="text-xs text-slate-400">
-                    Bagi {parsedNames.length} siswa secara adil dan acak
+                    Bagi {parsedNames.length} {terms.memberTitlePlural.toLowerCase()} secara adil dan acak
                   </span>
                 </div>
 
@@ -752,7 +755,7 @@ export const SpinWheelView: React.FC = () => {
                   <Users className="w-12 h-12 text-slate-600 mx-auto mb-2" />
                   <h4 className="text-sm font-bold text-white">Belum Ada Kelompok Yang Diacak</h4>
                   <p className="text-xs text-slate-400 max-w-sm mx-auto mt-1 mb-4">
-                    Pilih jumlah kelompok yang diinginkan lalu klik "Acak Sekarang" untuk membagi daftar siswa secara instan.
+                    Pilih jumlah kelompok yang diinginkan lalu klik "Acak Sekarang" untuk membagi daftar {terms.memberTitlePlural.toLowerCase()} secara instan.
                   </p>
                   <button
                     onClick={handleGenerateGroups}

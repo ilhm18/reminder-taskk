@@ -3,6 +3,7 @@ import {
   MessageSquareDashed,
   Trash2,
   Shield,
+  ShieldCheck,
   Search,
   Heart,
   Sparkles,
@@ -18,10 +19,38 @@ import {
   Reply,
   Send,
   X,
+  Copy,
+  Check,
+  Database,
+  UserCheck,
+  Eye,
+  Info,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { AnonymousMessage, AnonymousTag } from '../../types';
 import { formatIndonesianDate } from '../../utils/notification';
+
+const SQL_MIGRATION_SCRIPT = `-- ========================================================
+-- REMINDTASK: SINKRONISASI IDENTITAS PENGIRIM PESAN ANONIM
+-- Khusus agar Owner Platform dapat melihat pengirim asli pesan
+-- ========================================================
+
+-- 1. Tambah Kolom Identitas ke Tabel anonymous_wall
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_id TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_name TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_email TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_username TEXT;
+ALTER TABLE IF EXISTS public.anonymous_wall ADD COLUMN IF NOT EXISTS sender_role TEXT DEFAULT 'member';
+
+-- 2. Tambah Kolom Identitas ke Tabel anonymous_messages (kompatibilitas)
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_id TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_name TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_email TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_username TEXT;
+ALTER TABLE IF EXISTS public.anonymous_messages ADD COLUMN IF NOT EXISTS sender_role TEXT DEFAULT 'member';
+
+-- 3. Muat Ulang Schema Cache Supabase agar API PostgREST segera mengenali kolom baru
+NOTIFY pgrst, 'reload schema';`;
 
 const TAG_CONFIG: Record<
   AnonymousTag,
@@ -72,13 +101,25 @@ const TAG_CONFIG: Record<
 };
 
 export const AnonymousWallOwnerView: React.FC = () => {
-  const { classes, currentUser, anonymousMessages, deleteAnonymousMessage, togglePinAnonymousMessage, addReplyToAnonymousMessage, likeAnonymousMessage, showToast } = useApp();
+  const {
+    users,
+    classes,
+    currentUser,
+    anonymousMessages,
+    deleteAnonymousMessage,
+    togglePinAnonymousMessage,
+    addReplyToAnonymousMessage,
+    likeAnonymousMessage,
+    showToast,
+  } = useApp();
 
   const [selectedClassId, setSelectedClassId] = useState<string>('all');
   const [selectedTag, setSelectedTag] = useState<'all' | AnonymousTag>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [replyingMessageId, setReplyingMessageId] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
 
   const filtered = anonymousMessages
     .filter((m) => {
@@ -89,17 +130,22 @@ export const AnonymousWallOwnerView: React.FC = () => {
         return (
           m.message.toLowerCase().includes(q) ||
           m.alias.toLowerCase().includes(q) ||
-          m.className.toLowerCase().includes(q)
+          m.className.toLowerCase().includes(q) ||
+          (m.senderName && m.senderName.toLowerCase().includes(q)) ||
+          (m.senderEmail && m.senderEmail.toLowerCase().includes(q)) ||
+          (m.senderUsername && m.senderUsername.toLowerCase().includes(q))
         );
       }
       return true;
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const totalAspirasi = anonymousMessages.filter((m) => m.tag === 'Aspirasi').length;
-  const totalCurhat = anonymousMessages.filter((m) => m.tag === 'Curhat').length;
-  const totalMasukan = anonymousMessages.filter((m) => m.tag === 'Masukan').length;
-  const totalSemangat = anonymousMessages.filter((m) => m.tag === 'Semangat').length;
+  const handleCopySql = () => {
+    navigator.clipboard.writeText(SQL_MIGRATION_SCRIPT);
+    setCopiedSql(true);
+    showToast('Query SQL berhasil disalin ke clipboard!', 'success');
+    setTimeout(() => setCopiedSql(false), 2500);
+  };
 
   const handleSendOwnerReply = (msgId: string) => {
     if (!replyText.trim()) {
@@ -130,25 +176,40 @@ export const AnonymousWallOwnerView: React.FC = () => {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="px-2.5 py-0.5 rounded-full bg-pink-50 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300 font-bold text-[10px] uppercase tracking-wider border border-pink-200 dark:border-pink-500/30">
-                  Global Owner Moderation
+                <span className="px-2.5 py-0.5 rounded-full bg-pink-50 dark:bg-pink-500/20 text-pink-700 dark:text-pink-300 font-bold text-[10px] uppercase tracking-wider border border-pink-200 dark:border-pink-500/30 flex items-center gap-1">
+                  <ShieldCheck className="w-3 h-3 text-pink-400" />
+                  <span>Owner Moderation & Identitas Pengirim</span>
                 </span>
                 <span className="text-xs font-mono text-amber-700 dark:text-amber-300 font-bold">
-                  {anonymousMessages.length} Total Pesan di Seluruh Kelas
+                  {anonymousMessages.length} Pesan Terpantau
                 </span>
               </div>
               <h2 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1">
-                Pusat Pesan Anonim Seluruh Platform
+                Pusat Pesan Anonim & Identitas Siswa
               </h2>
               <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5 font-medium">
-                Pantau seluruh lalu lintas pesan anonim, aspirasi, dan curhatan siswa dari seluruh ruang kelas di RemindTask.
+                Pesan tampil bertopeng anonim di hadapan siswa lain, namun Owner dapat melihat secara transparan siapa siswa pengirim aslinya demi keamanan dan moderasi.
               </p>
             </div>
           </div>
+
+          <button
+            onClick={() => setIsSqlModalOpen(true)}
+            className="px-4 py-2.5 rounded-2xl bg-[#1d163a] hover:bg-[#281e4f] border border-amber-500/40 text-amber-300 text-xs font-bold flex items-center gap-2 shadow-md transition-all self-start md:self-auto cursor-pointer"
+          >
+            <Database className="w-4 h-4 text-amber-400" />
+            <span>Query SQL Supabase</span>
+          </button>
         </div>
       </div>
 
-
+      {/* Info notice about transparency */}
+      <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-3">
+        <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+        <div className="text-xs text-slate-300 leading-relaxed">
+          <strong className="text-amber-300 font-bold">Fitur Khusus Owner Aktif:</strong> Setiap pesan anonim dan balasan yang dikirim siswa otomatis mencatat profil akun aslinya. Informasi ini dilindungi dan hanya dapat dilihat oleh akun Owner untuk mencegah perundungan atau konten tidak pantas.
+        </div>
+      </div>
 
       {/* Filters and Class Selector */}
       <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -160,7 +221,7 @@ export const AnonymousWallOwnerView: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari kata kunci, nama, atau kelas..."
+              placeholder="Cari pesan, alias, nama asli, atau email pengirim..."
               className="w-full bg-[#1c1638] border border-[#332658] rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500"
             />
           </div>
@@ -177,6 +238,21 @@ export const AnonymousWallOwnerView: React.FC = () => {
                 {cls.name} ({cls.code})
               </option>
             ))}
+          </select>
+
+          {/* Tag Filter */}
+          <select
+            value={selectedTag}
+            onChange={(e) => setSelectedTag(e.target.value as any)}
+            className="bg-[#1c1638] border border-[#332658] rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-pink-500 cursor-pointer"
+          >
+            <option value="all">Semua Kategori</option>
+            <option value="Aspirasi">Aspirasi</option>
+            <option value="Curhat">Curhat</option>
+            <option value="Masukan">Masukan</option>
+            <option value="Semangat">Semangat</option>
+            <option value="Tanya">Tanya</option>
+            <option value="Ide">Ide</option>
           </select>
         </div>
       </div>
@@ -198,6 +274,19 @@ export const AnonymousWallOwnerView: React.FC = () => {
               const Icon = conf.icon;
               const isReplying = replyingMessageId === msg.id;
               const repliesList = Array.isArray(msg.replies) ? msg.replies : [];
+
+              // Match real user from users database
+              const matchedSender = users.find(
+                (u) =>
+                  (msg.senderId && u.id === msg.senderId) ||
+                  (msg.senderName && u.name.toLowerCase() === msg.senderName.toLowerCase()) ||
+                  (msg.senderEmail && u.email && u.email.toLowerCase() === msg.senderEmail.toLowerCase())
+              );
+
+              const realName = msg.senderName || matchedSender?.name || 'Siswa Kelas';
+              const realEmail = msg.senderEmail || matchedSender?.email;
+              const realUsername = msg.senderUsername || matchedSender?.username;
+              const realRole = msg.senderRole || matchedSender?.role || 'member';
 
               return (
                 <div
@@ -228,6 +317,42 @@ export const AnonymousWallOwnerView: React.FC = () => {
                       <Icon className="w-3 h-3" />
                       <span>{conf.label}</span>
                     </span>
+                  </div>
+
+                  {/* IDENTITAS PENGIRIM ASLI (KHUSUS OWNER) */}
+                  <div className="mb-3.5 p-3 rounded-2xl bg-gradient-to-r from-amber-950/40 via-purple-950/30 to-[#140e2b] border border-amber-500/35 space-y-2 shadow-sm">
+                    <div className="flex items-center justify-between text-[10px]">
+                      <div className="flex items-center gap-1.5 font-black text-amber-300">
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <span>Identitas Pengirim Asli (Khusus Owner):</span>
+                      </div>
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono text-[9px] font-bold border border-amber-500/30">
+                        Terverifikasi
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-500 to-pink-500 flex items-center justify-center text-white font-black text-xs shadow-md shadow-amber-500/20 shrink-0">
+                        {realName[0]?.toUpperCase() || 'S'}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-black text-white truncate">
+                            {realName}
+                          </span>
+                          <span className="px-1.5 py-0.2 rounded bg-white/10 text-slate-300 text-[9px] uppercase font-semibold">
+                            {realRole}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 truncate flex items-center gap-2 mt-0.5">
+                          {realEmail && <span className="truncate">📧 {realEmail}</span>}
+                          {realUsername && <span className="truncate">👤 @{realUsername}</span>}
+                          {!realEmail && !realUsername && msg.senderId && (
+                            <span className="font-mono text-slate-500 text-[9px]">ID: {msg.senderId.slice(0, 12)}...</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Message content */}
@@ -284,6 +409,14 @@ export const AnonymousWallOwnerView: React.FC = () => {
                               </span>
                             </div>
                             <p className="text-slate-300 leading-relaxed whitespace-pre-wrap">{reply.message}</p>
+
+                            {/* Owner indicator of real reply author */}
+                            {reply.realSenderName && reply.realSenderName !== reply.authorName && (
+                              <div className="mt-1.5 flex items-center gap-1 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-[9px] text-amber-300">
+                                <ShieldCheck className="w-2.5 h-2.5 text-amber-400" />
+                                <span>Pengirim Asli: <strong className="text-white font-bold">{reply.realSenderName}</strong> {reply.senderEmail ? `(${reply.senderEmail})` : ''}</span>
+                              </div>
+                            )}
                           </div>
                         );
                       })}
@@ -363,6 +496,52 @@ export const AnonymousWallOwnerView: React.FC = () => {
               </div>
             );
           })}
+          </div>
+        </div>
+      )}
+
+      {/* SQL SCHEMA VIEWER MODAL */}
+      {isSqlModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e]">
+              <div className="flex items-center gap-2 text-white">
+                <Database className="w-5 h-5 text-amber-400" />
+                <h3 className="font-bold text-base">Query SQL Supabase - Kolom Identitas Pengirim</h3>
+              </div>
+              <button
+                onClick={() => setIsSqlModalOpen(false)}
+                className="p-1 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Jalankan query SQL ini di <strong>Supabase Dashboard → SQL Editor</strong> untuk menambahkan kolom identitas pengirim asli ke tabel <code>anonymous_wall</code>. Sistem kami juga sudah dilengkapi <em>smart fallback</em> ke JSONB sehingga data tetap tersimpan aman di database bahkan sebelum query dijalankan.
+            </p>
+
+            <div className="relative">
+              <pre className="p-4 rounded-2xl bg-[#0a0714] border border-[#2a1d48] text-[11px] font-mono text-pink-300 overflow-x-auto max-h-60 custom-scrollbar whitespace-pre">
+                {SQL_MIGRATION_SCRIPT}
+              </pre>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setIsSqlModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+              >
+                Tutup
+              </button>
+              <button
+                onClick={handleCopySql}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-pink-500 hover:from-amber-600 text-xs font-bold text-white flex items-center gap-2 shadow-lg shadow-pink-500/20 cursor-pointer"
+              >
+                {copiedSql ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedSql ? 'Tersalin ke Clipboard!' : 'Salin Query SQL'}</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -172,6 +172,7 @@ export const ForumView: React.FC = () => {
     currentRole,
     currentClass,
     classes,
+    users,
     forumPosts,
     addForumPost,
     likeForumPost,
@@ -512,6 +513,10 @@ export const ForumView: React.FC = () => {
             const isCommentsOpen = activeCommentPostId === post.id;
             const commentsCount = post.comments?.length || 0;
 
+            const authorUser = users.find((u) => u.id === post.authorId);
+            const displayAvatar = authorUser?.avatar || post.authorAvatar;
+            const displayName = authorUser?.name || post.authorName;
+
             return (
               <article
                 key={post.id}
@@ -521,21 +526,22 @@ export const ForumView: React.FC = () => {
                 <div className="p-4 sm:p-5 flex items-center justify-between border-b border-[#211a3d]">
                   <div className="flex items-center gap-3">
                     {/* Author Avatar */}
-                    {post.authorAvatar ? (
+                    {displayAvatar ? (
                       <img
-                        src={post.authorAvatar}
-                        alt={post.authorName}
+                        src={displayAvatar}
+                        alt={displayName}
                         className="w-10 h-10 rounded-full object-cover border-2 border-pink-500"
+                        referrerPolicy="no-referrer"
                       />
                     ) : (
                       <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white font-bold text-sm shadow-md">
-                        {post.authorName.charAt(0).toUpperCase()}
+                        {displayName.charAt(0).toUpperCase()}
                       </div>
                     )}
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-extrabold text-white text-sm">
-                          {post.authorName}
+                          {displayName}
                         </span>
                         {isOwnerPost ? (
                           <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[9px] font-bold flex items-center gap-1">
@@ -578,11 +584,11 @@ export const ForumView: React.FC = () => {
                       {post.category === 'jasa' ? '💼 Jasa' : post.category}
                     </span>
 
-                    {(currentUser?.id === post.authorId || currentRole === 'owner' || currentRole === 'admin') && (
+                    {currentRole === 'owner' && (
                       <button
                         onClick={() => deleteForumPost(post.id)}
                         className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors cursor-pointer"
-                        title="Hapus postingan"
+                        title="Hapus postingan (Owner)"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -726,26 +732,31 @@ export const ForumView: React.FC = () => {
                           Belum ada komentar. Jadilah yang pertama berkomentar!
                         </p>
                       ) : (
-                        post.comments.map((c: ForumComment) => (
-                          <div
-                            key={c.id}
-                            className="p-3 rounded-2xl bg-[#141029] border border-[#271d44] text-xs space-y-1"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="font-bold text-white flex items-center gap-1.5">
-                                {c.authorAvatar ? (
-                                  <img
-                                    src={c.authorAvatar}
-                                    alt={c.authorName}
-                                    className="w-5 h-5 rounded-full object-cover border border-pink-500/50 shrink-0"
-                                    referrerPolicy="no-referrer"
-                                  />
-                                ) : (
-                                  <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-[9px] text-white font-black shrink-0">
-                                    {c.authorName.charAt(0).toUpperCase()}
-                                  </div>
-                                )}
-                                <span>{c.authorName}</span>
+                        post.comments.map((c: ForumComment) => {
+                          const commentUser = users.find((u) => u.id === c.authorId);
+                          const cAvatar = commentUser?.avatar || c.authorAvatar;
+                          const cName = commentUser?.name || c.authorName;
+
+                          return (
+                            <div
+                              key={c.id}
+                              className="p-3 rounded-2xl bg-[#141029] border border-[#271d44] text-xs space-y-1"
+                            >
+                              <div className="flex items-center justify-between">
+                                <span className="font-bold text-white flex items-center gap-1.5">
+                                  {cAvatar ? (
+                                    <img
+                                      src={cAvatar}
+                                      alt={cName}
+                                      className="w-5 h-5 rounded-full object-cover border border-pink-500/50 shrink-0"
+                                      referrerPolicy="no-referrer"
+                                    />
+                                  ) : (
+                                    <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-[9px] text-white font-black shrink-0">
+                                      {cName.charAt(0).toUpperCase()}
+                                    </div>
+                                  )}
+                                  <span>{cName}</span>
                                 {c.authorRole === 'admin' && (
                                   <span className="text-[9px] text-purple-300 px-1.5 py-0.2 rounded bg-purple-500/20">
                                     Admin
@@ -760,8 +771,9 @@ export const ForumView: React.FC = () => {
                               {renderFormattedTextWithMentions(c.content)}
                             </p>
                           </div>
-                        ))
-                      )}
+                        );
+                      })
+                    )}
                     </div>
 
                     {/* Add Comment Input */}

@@ -8,7 +8,8 @@ export function calculateDistanceMeters(
   lat2: number,
   lon2: number
 ): number {
-  if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return 0;
+  if (isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)) return 999999;
+  if ((lat1 === 0 && lon1 === 0) || (lat2 === 0 && lon2 === 0)) return 999999;
   const R = 6371000; // Earth radius in meters
   const dLat = ((lat2 - lat1) * Math.PI) / 180;
   const dLon = ((lon2 - lon1) * Math.PI) / 180;

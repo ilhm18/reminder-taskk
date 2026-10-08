@@ -20,8 +20,15 @@ import {
   Send,
   Video,
   VideoOff,
+  Image as ImageIcon,
+  Scan,
+  Zap,
+  HelpCircle,
+  Info,
+  X,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { AttendanceSession, AttendanceRecord, AttendanceStatus } from '../../types';
 
 export const AttendanceMemberView: React.FC = () => {
@@ -33,6 +40,9 @@ export const AttendanceMemberView: React.FC = () => {
     recordAttendance,
     showToast,
   } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   // Find active session for this member's class
   const targetClassId = currentClass?.id || currentUser?.classId || '';
@@ -50,30 +60,93 @@ export const AttendanceMemberView: React.FC = () => {
   const [activeMode, setActiveMode] = useState<'camera' | 'permission'>('camera');
   const [permissionStatus, setPermissionStatus] = useState<AttendanceStatus>('izin');
   const [permissionNote, setPermissionNote] = useState('');
+  const [proofImageUrl, setProofImageUrl] = useState('');
+  const [proofFileName, setProofFileName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleProofImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Lampiran bukti harus berupa foto/gambar (JPG, PNG, WebP).', 'warn');
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      showToast('Ukuran foto melebihi batas 8MB.', 'warn');
+      return;
+    }
+
+    setProofFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_SIZE = 900;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height = Math.round((height * MAX_SIZE) / width);
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width = Math.round((width * MAX_SIZE) / height);
+            height = MAX_SIZE;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setProofImageUrl(dataUrl);
+          showToast('Lampiran foto bukti berhasil diunggah!', 'success');
+        }
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   // Camera video ref and scanner loop
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const currentStreamRef = useRef<MediaStream | null>(null);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
+  const [isTorchOn, setIsTorchOn] = useState(false);
+  const [hasTorchSupport, setHasTorchSupport] = useState(false);
+  const [isQrDetected, setIsQrDetected] = useState(false);
+  const [showScanTips, setShowScanTips] = useState(false);
   const scanIntervalRef = useRef<number | null>(null);
   const isScanningRef = useRef<boolean>(false);
 
   // Start Camera
-  const startCamera = async () => {
+  const startCamera = async (targetFacing: 'environment' | 'user' = facingMode) => {
     setCameraError(null);
+    setIsQrDetected(false);
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error('Fitur kamera tidak didukung atau tidak tersedia di peramban ini.');
       }
 
+      // Stop existing tracks first if any
+      if (currentStreamRef.current) {
+        currentStreamRef.current.getTracks().forEach((track) => track.stop());
+        currentStreamRef.current = null;
+      }
+
       let stream: MediaStream;
       try {
-        // Coba kamera belakang (environment) terlebih dahulu
         stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            facingMode: { ideal: 'environment' },
+            facingMode: { ideal: targetFacing },
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
@@ -85,6 +158,17 @@ export const AttendanceMemberView: React.FC = () => {
           video: true,
           audio: false,
         });
+      }
+
+      currentStreamRef.current = stream;
+
+      // Check if flashlight/torch is supported
+      try {
+        const videoTrack = stream.getVideoTracks()[0];
+        const capabilities: any = videoTrack?.getCapabilities ? videoTrack.getCapabilities() : {};
+        setHasTorchSupport(Boolean(capabilities?.torch));
+      } catch {
+        setHasTorchSupport(false);
       }
 
       if (videoRef.current) {
@@ -108,16 +192,77 @@ export const AttendanceMemberView: React.FC = () => {
 
   // Stop Camera
   const stopCamera = () => {
+    if (currentStreamRef.current) {
+      currentStreamRef.current.getTracks().forEach((track) => track.stop());
+      currentStreamRef.current = null;
+    }
     if (videoRef.current && videoRef.current.srcObject) {
       const stream = videoRef.current.srcObject as MediaStream;
       stream.getTracks().forEach((track) => track.stop());
       videoRef.current.srcObject = null;
     }
     setIsCameraActive(false);
+    setIsTorchOn(false);
+    setIsQrDetected(false);
     if (scanIntervalRef.current) {
       clearInterval(scanIntervalRef.current);
       scanIntervalRef.current = null;
     }
+  };
+
+  // Toggle Torch (Senter Kamera)
+  const toggleTorch = async () => {
+    if (!currentStreamRef.current) return;
+    try {
+      const track = currentStreamRef.current.getVideoTracks()[0];
+      if (track) {
+        const nextState = !isTorchOn;
+        await (track as any).applyConstraints({
+          advanced: [{ torch: nextState }],
+        });
+        setIsTorchOn(nextState);
+      }
+    } catch (err) {
+      console.warn('Torch toggle error:', err);
+    }
+  };
+
+  // Toggle Camera Facing Mode (Depan / Belakang)
+  const toggleCameraFacing = async () => {
+    const nextFacing = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextFacing);
+    await startCamera(nextFacing);
+  };
+
+  // Scan QR from image file fallback
+  const handleScanFromImageFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (ctx) {
+          ctx.drawImage(img, 0, 0);
+          const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const result = jsQR(imgData.data, imgData.width, imgData.height);
+          if (result && result.data) {
+            setIsQrDetected(true);
+            handleProcessScan(result.data);
+          } else {
+            showToast('Tidak dapat mendeteksi Kode QR dari foto tersebut. Coba ambil foto lebih dekat dan jelas.', 'warn');
+          }
+        }
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   // Switch camera on/off when mode changes
@@ -169,6 +314,7 @@ export const AttendanceMemberView: React.FC = () => {
 
       if (code && code.data && activeSession) {
         isScanningRef.current = true;
+        setIsQrDetected(true);
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
           try {
             navigator.vibrate(100);
@@ -190,6 +336,7 @@ export const AttendanceMemberView: React.FC = () => {
   const handleProcessScan = async (scannedData: string) => {
     if (!activeSession || isSubmitting) {
       isScanningRef.current = false;
+      setIsQrDetected(false);
       return;
     }
     setIsSubmitting(true);
@@ -213,6 +360,7 @@ export const AttendanceMemberView: React.FC = () => {
       showToast('Presensi Anda berhasil dicatat! ✓', 'success');
       stopCamera();
     } else {
+      setIsQrDetected(false);
       showToast(res.message, 'warn');
       // Berikan jeda 1.5 detik sebelum memindai ulang bila gagal
       setTimeout(() => {
@@ -236,9 +384,19 @@ export const AttendanceMemberView: React.FC = () => {
       activeSession.id,
       permissionStatus,
       'permission_request',
-      permissionNote.trim()
+      permissionNote.trim(),
+      undefined,
+      undefined,
+      undefined,
+      proofImageUrl || undefined,
+      proofFileName || undefined
     );
     setIsSubmitting(false);
+    if (res.success) {
+      setPermissionNote('');
+      setProofImageUrl('');
+      setProofFileName('');
+    }
   };
 
   // Helper promise for geolocation
@@ -283,10 +441,10 @@ export const AttendanceMemberView: React.FC = () => {
               </span>
             </div>
             <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight">
-              Absensi &amp; Scan Barcode Kelas
+              Absensi &amp; Scan QR Code Kelas
             </h2>
             <p className="text-xs text-slate-400 mt-1 max-w-xl leading-relaxed">
-              Scan barcode dinamis yang tampil di layar proyektor kelas atau masukkan kode dinamis untuk mencatat kehadiran Anda.
+              Scan QR code dinamis yang tampil di layar proyektor kelas untuk mencatat kehadiran Anda secara akurat.
             </p>
           </div>
 
@@ -394,10 +552,11 @@ export const AttendanceMemberView: React.FC = () => {
                 </div>
               </div>
 
-              {/* MODE 1: CAMERA SCANNER */}
+              {/* MODE 1: CAMERA SCANNER DENGAN PANDUAN VISUAL & OVERLAY LENGKAP */}
               {activeMode === 'camera' && (
                 <div className="flex flex-col items-center space-y-4">
-                  <div className="relative w-full max-w-sm aspect-square rounded-3xl bg-[#090717] border-2 border-pink-500/40 overflow-hidden shadow-2xl flex items-center justify-center">
+                  {/* Camera Viewport Container */}
+                  <div className="relative w-full max-w-sm sm:max-w-md aspect-square rounded-3xl bg-[#090717] border-2 border-pink-500/50 overflow-hidden shadow-2xl flex items-center justify-center select-none">
                     <video
                       ref={videoRef}
                       playsInline
@@ -407,18 +566,182 @@ export const AttendanceMemberView: React.FC = () => {
                     />
                     <canvas ref={canvasRef} className="hidden" />
 
-                    {/* Scanner Reticle Overlay */}
-                    <div className="absolute inset-8 border-2 border-dashed border-pink-400/70 rounded-2xl pointer-events-none flex items-center justify-center animate-pulse">
-                      <div className="w-full h-0.5 bg-pink-500 shadow-md shadow-pink-500/80 animate-bounce" />
-                    </div>
+                    {/* OVERLAY & PANDUAN VISUAL KOTAK TARGET PINTAR */}
+                    {isCameraActive && !cameraError && (
+                      <div className="absolute inset-0 pointer-events-none flex flex-col items-center justify-between p-3.5 sm:p-4 z-10">
+                        {/* Top Overlay Banner with status & quick controls */}
+                        <div className="w-full flex items-center justify-between pointer-events-auto gap-2">
+                          <div className="px-3 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white flex items-center gap-2 shadow-lg">
+                            <span
+                              className={`w-2 h-2 rounded-full ${
+                                isQrDetected ? 'bg-emerald-400' : 'bg-pink-400 animate-pulse'
+                              }`}
+                            />
+                            <span className="text-[11px] font-bold tracking-wide">
+                              {isQrDetected ? 'Kode Terdeteksi!' : 'Arahkan ke Kotak'}
+                            </span>
+                          </div>
 
+                          {/* Quick Controls in Top-Right */}
+                          <div className="flex items-center gap-1.5">
+                            {/* Flashlight/Torch Button */}
+                            {hasTorchSupport && (
+                              <button
+                                type="button"
+                                onClick={toggleTorch}
+                                className={`p-2 rounded-xl backdrop-blur-md border transition-all cursor-pointer ${
+                                  isTorchOn
+                                    ? 'bg-amber-500 text-black border-amber-400 shadow-lg shadow-amber-500/30'
+                                    : 'bg-black/70 text-white border-white/10 hover:bg-black/90'
+                                }`}
+                                title={isTorchOn ? 'Matikan Senter' : 'Nyalakan Senter'}
+                              >
+                                <Zap className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {/* Camera Switch (Flip) Button */}
+                            <button
+                              type="button"
+                              onClick={toggleCameraFacing}
+                              className="p-2 rounded-xl bg-black/70 hover:bg-black/90 text-white backdrop-blur-md border border-white/10 transition-all cursor-pointer shadow-lg active:scale-95"
+                              title="Ganti Kamera (Depan / Belakang)"
+                            >
+                              <RotateCw className="w-4 h-4" />
+                            </button>
+
+                            {/* Quick Help Tips Toggle */}
+                            <button
+                              type="button"
+                              onClick={() => setShowScanTips((v) => !v)}
+                              className={`p-2 rounded-xl backdrop-blur-md border transition-all cursor-pointer ${
+                                showScanTips
+                                  ? 'bg-pink-500 text-white border-pink-400'
+                                  : 'bg-black/70 text-white border-white/10 hover:bg-black/90'
+                              }`}
+                              title="Panduan Pemindaian"
+                            >
+                              <HelpCircle className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* TARGET RETICLE VIEWFINDER FRAME (THE MAIN VISUAL FOCUS BOX) */}
+                        <div className="relative w-56 h-56 sm:w-64 sm:h-64 max-w-[76vw] max-h-[76vw] my-auto flex items-center justify-center">
+                          {/* Dark vignette backdrop cutout outside the box */}
+                          <div
+                            className={`absolute inset-0 rounded-3xl transition-all duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'shadow-[0_0_0_9999px_rgba(5,3,15,0.75)]'
+                                : 'shadow-[0_0_0_9999px_rgba(7,5,20,0.68)]'
+                            }`}
+                          />
+
+                          {/* Border container with soft glow */}
+                          <div
+                            className={`absolute inset-0 rounded-3xl border-2 transition-all duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'border-emerald-400 shadow-[0_0_25px_rgba(52,211,153,0.8),inset_0_0_20px_rgba(52,211,153,0.3)]'
+                                : 'border-pink-500/40 shadow-[0_0_20px_rgba(236,72,153,0.25),inset_0_0_15px_rgba(236,72,153,0.1)]'
+                            }`}
+                          />
+
+                          {/* 4 Crisp Neon Corner Brackets */}
+                          {/* Top-Left */}
+                          <div
+                            className={`absolute -top-1 -left-1 w-7 h-7 sm:w-8 sm:h-8 border-t-4 border-l-4 rounded-tl-2xl transition-colors duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.9)]'
+                                : 'border-pink-400 shadow-[0_0_14px_rgba(236,72,153,0.8)]'
+                            }`}
+                          />
+                          {/* Top-Right */}
+                          <div
+                            className={`absolute -top-1 -right-1 w-7 h-7 sm:w-8 sm:h-8 border-t-4 border-r-4 rounded-tr-2xl transition-colors duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.9)]'
+                                : 'border-pink-400 shadow-[0_0_14px_rgba(236,72,153,0.8)]'
+                            }`}
+                          />
+                          {/* Bottom-Left */}
+                          <div
+                            className={`absolute -bottom-1 -left-1 w-7 h-7 sm:w-8 sm:h-8 border-b-4 border-l-4 rounded-bl-2xl transition-colors duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.9)]'
+                                : 'border-pink-400 shadow-[0_0_14px_rgba(236,72,153,0.8)]'
+                            }`}
+                          />
+                          {/* Bottom-Right */}
+                          <div
+                            className={`absolute -bottom-1 -right-1 w-7 h-7 sm:w-8 sm:h-8 border-b-4 border-r-4 rounded-br-2xl transition-colors duration-300 pointer-events-none ${
+                              isQrDetected
+                                ? 'border-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.9)]'
+                                : 'border-pink-400 shadow-[0_0_14px_rgba(236,72,153,0.8)]'
+                            }`}
+                          />
+
+                          {/* Animated Laser Sweep Line (Active when scanning) */}
+                          {!isQrDetected && !isSubmitting && (
+                            <div className="qr-scan-laser-line" />
+                          )}
+
+                          {/* Center Alignment Target Crosshair */}
+                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-50">
+                            <div className="relative w-8 h-8 flex items-center justify-center">
+                              <div
+                                className={`w-2 h-2 rounded-full absolute ${
+                                  isQrDetected ? 'bg-emerald-400' : 'bg-pink-400 animate-ping'
+                                }`}
+                              />
+                              <div
+                                className={`w-1.5 h-1.5 rounded-full absolute ${
+                                  isQrDetected ? 'bg-emerald-400' : 'bg-pink-400'
+                                }`}
+                              />
+                              <div
+                                className={`w-5 h-[1.5px] absolute ${
+                                  isQrDetected ? 'bg-emerald-400/80' : 'bg-pink-400/60'
+                                }`}
+                              />
+                              <div
+                                className={`h-5 w-[1.5px] absolute ${
+                                  isQrDetected ? 'bg-emerald-400/80' : 'bg-pink-400/60'
+                                }`}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Processing Loader Overlay if Submitting */}
+                          {isSubmitting && (
+                            <div className="absolute inset-0 rounded-3xl bg-black/80 backdrop-blur-xs flex flex-col items-center justify-center p-4 text-center z-20 animate-in fade-in">
+                              <div className="w-10 h-10 border-3 border-pink-500 border-t-transparent rounded-full animate-spin mb-2" />
+                              <span className="text-xs font-black text-white">Memvalidasi Presensi...</span>
+                              <span className="text-[10px] text-pink-300">Mohon tunggu sejenak</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Bottom Distance & Guidance Tip Badge */}
+                        <div className="px-3.5 py-1.5 rounded-full bg-black/75 backdrop-blur-md border border-white/10 text-white flex items-center gap-2 shadow-lg max-w-xs text-center pointer-events-auto">
+                          <Scan className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                          <span className="text-[11px] font-semibold text-slate-200">
+                            Jarak ideal 20 – 40 cm • Sejajarkan ke kotak
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Camera Error State */}
                     {cameraError && (
-                      <div className="absolute inset-0 p-6 bg-black/90 flex flex-col items-center justify-center text-center space-y-3">
-                        <VideoOff className="w-10 h-10 text-red-400" />
-                        <p className="text-xs text-red-300 max-w-xs">{cameraError}</p>
+                      <div className="absolute inset-0 p-6 bg-black/95 flex flex-col items-center justify-center text-center space-y-3 z-30">
+                        <VideoOff className="w-12 h-12 text-red-400" />
+                        <div>
+                          <p className="text-xs font-bold text-white mb-1">Akses Kamera Gagal</p>
+                          <p className="text-[11px] text-red-300 max-w-xs leading-relaxed">{cameraError}</p>
+                        </div>
                         <button
                           type="button"
-                          onClick={startCamera}
+                          onClick={() => startCamera(facingMode)}
                           className="px-4 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-bold text-xs cursor-pointer shadow-md flex items-center gap-2 transition-all active:scale-95"
                         >
                           <RotateCw className="w-3.5 h-3.5" />
@@ -428,8 +751,64 @@ export const AttendanceMemberView: React.FC = () => {
                     )}
                   </div>
 
+                  {/* Quick Tips Drawer / Helper Card */}
+                  {showScanTips && (
+                    <div className="w-full max-w-md p-4 rounded-2xl bg-[#171131] border border-pink-500/30 text-xs text-slate-300 space-y-2 shadow-xl animate-in slide-in-from-top-2 duration-200">
+                      <div className="flex items-center justify-between text-white font-bold pb-1.5 border-b border-[#291e4f]">
+                        <span className="flex items-center gap-1.5 text-pink-300">
+                          <HelpCircle className="w-4 h-4 text-pink-400" />
+                          Panduan Memindai Presensi Cepat
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowScanTips(false)}
+                          className="text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-pink-400 block mb-0.5">1. Posisi Pas</span>
+                          Arahkan kamera hingga seluruh QR code masuk pas di dalam 4 sudut kotak panduan.
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-purple-400 block mb-0.5">2. Hindari Silau</span>
+                          Jika layar proyektor silau, miringkan sudut HP sedikit atau atur jarak 30 cm.
+                        </div>
+                        <div className="p-2.5 rounded-xl bg-[#0e0920] border border-[#231742]">
+                          <span className="font-bold text-emerald-400 block mb-0.5">3. Tahan Stabil</span>
+                          Tahan kamera 1 detik hingga terdengar getaran/bunyi presensi berhasil.
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions Bar (Upload Foto QR or Toggle Tips) */}
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                    <label className="px-4 py-2 rounded-xl bg-[#191238] hover:bg-[#251b4f] text-pink-300 hover:text-white text-xs font-bold border border-[#342461] shadow-md cursor-pointer flex items-center gap-2 transition-all active:scale-95">
+                      <ImageIcon className="w-4 h-4 text-pink-400" />
+                      <span>Pindai dari Foto / Galeri</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleScanFromImageFile}
+                        className="hidden"
+                      />
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowScanTips((v) => !v)}
+                      className="px-3.5 py-2 rounded-xl bg-[#140e29] hover:bg-[#201642] text-slate-300 hover:text-white text-xs font-medium border border-[#271d49] transition-all flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Info className="w-3.5 h-3.5 text-purple-400" />
+                      <span>{showScanTips ? 'Tutup Panduan' : 'Tips Memindai'}</span>
+                    </button>
+                  </div>
+
                   <p className="text-xs text-slate-400 text-center max-w-sm leading-relaxed">
-                    Arahkan kamera HP Anda ke <strong>Kode QR di layar proyektor kelas</strong>. Presensi Anda akan otomatis tercatat seketika!
+                    Arahkan kamera ke <strong>Kode QR di proyektor kelas</strong>. Presensi Anda otomatis tervalidasi seketika.
                   </p>
                 </div>
               )}
@@ -481,6 +860,60 @@ export const AttendanceMemberView: React.FC = () => {
                     />
                   </div>
 
+                  <div>
+                    <label className="text-xs font-bold text-slate-300 block mb-1.5 flex items-center justify-between">
+                      <span className="flex items-center gap-1.5">
+                        <ImageIcon className="w-3.5 h-3.5 text-pink-400" />
+                        <span>Lampiran / Bukti Foto Surat &amp; Berobat:</span>
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-semibold px-2 py-0.5 rounded bg-slate-800/80 border border-slate-700">
+                        (Opsional)
+                      </span>
+                    </label>
+
+                    <label className="flex flex-col items-center justify-center p-3.5 border-2 border-dashed border-[#291e4f] hover:border-pink-500/70 rounded-2xl bg-[#120e26] cursor-pointer transition-colors text-center group">
+                      <ImageIcon className="w-5 h-5 text-pink-400 mb-1 group-hover:scale-110 transition-transform" />
+                      <span className="text-xs font-bold text-white">
+                        {proofFileName || 'Unggah Foto Bukti Surat / Resep Dokter'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-0.5">JPG, PNG, WebP (Maks 8MB)</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleProofImageUpload}
+                        className="hidden"
+                      />
+                    </label>
+
+                    {proofImageUrl && (
+                      <div className="mt-2.5 p-2 rounded-2xl bg-[#0e0a21] border border-pink-500/40 flex items-center justify-between gap-3 animate-in fade-in duration-150">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <img
+                            src={proofImageUrl}
+                            alt="Bukti Foto"
+                            className="h-12 w-12 object-cover rounded-xl border border-pink-500/50 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <span className="text-xs font-bold text-white block truncate">{proofFileName || 'Foto Bukti Surat.jpg'}</span>
+                            <span className="text-[10px] text-emerald-400 font-semibold flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-400" /> Bukti foto terlampir
+                            </span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setProofImageUrl('');
+                            setProofFileName('');
+                          }}
+                          className="px-2.5 py-1 rounded-xl bg-red-500/20 hover:bg-red-500/30 text-red-300 font-bold text-[10px] cursor-pointer transition-colors shrink-0"
+                        >
+                          Hapus Foto
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
                   <button
                     type="submit"
                     disabled={isSubmitting}
@@ -500,7 +933,7 @@ export const AttendanceMemberView: React.FC = () => {
           <Clock className="w-10 h-10 text-slate-500 mx-auto" />
           <h3 className="text-base font-bold text-white">Tidak Ada Sesi Presensi Yang Aktif</h3>
           <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
-            Guru atau Admin belum membuka sesi presensi digital saat ini. Halaman ini akan otomatis aktif begitu barcode kelas dibuka di depan kelas.
+            {terms.educatorTitle} atau Admin belum membuka sesi presensi digital saat ini. Halaman ini akan otomatis aktif begitu barcode kelas dibuka di depan kelas.
           </p>
         </div>
       )}

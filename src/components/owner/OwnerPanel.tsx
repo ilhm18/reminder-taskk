@@ -39,9 +39,17 @@ import {
   AlertTriangle,
   HelpCircle,
   QrCode,
+  Users,
+  LogIn,
+  Check,
+  Copy,
+  ChevronRight,
+  User as UserIcon,
+  FileText,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ClassItem, Task, User, ActivityLogItem } from '../../types';
+import { getTerminology } from '../../utils/terminology';
 import { AnalyticsView } from '../analytics/AnalyticsView';
 import { CalendarView } from '../calendar/CalendarView';
 import { DailyReportModal } from '../modals/DailyReportModal';
@@ -60,6 +68,64 @@ import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 import { formatIndonesianDate, getTaskDeadlineStatus } from '../../utils/notification';
 import { getStoredSupabaseConfig, saveSupabaseConfig, testSupabaseConnection, SUPABASE_SQL_SCHEMA, getSupabaseClient } from '../../services/supabase';
 
+const ACCESS_REALTIME_SQL = `-- ========================================================
+-- REMINDTASK: SINKRONISASI REALTIME TOTAL AKSES & LOGIN
+-- Menjamin tabel class_access_logs & activity_logs tereplikasi
+-- secara instan ke Dashboard Owner via Supabase Realtime
+-- ========================================================
+
+-- 1. Buat Tabel class_access_logs jika belum ada
+CREATE TABLE IF NOT EXISTS public.class_access_logs (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+  class_name TEXT,
+  class_code TEXT NOT NULL,
+  student_id TEXT NOT NULL,
+  student_name TEXT NOT NULL,
+  student_email TEXT,
+  device_info TEXT DEFAULT 'Desktop/Laptop',
+  accessed_at TIMESTAMPTZ DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Index untuk query cepat berdasarkan tanggal akses
+CREATE INDEX IF NOT EXISTS idx_class_access_logs_accessed_at ON public.class_access_logs(accessed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_class_access_logs_class_id ON public.class_access_logs(class_id);
+
+-- 3. Pastikan RLS Aktif dan Mengizinkan Pembacaan Realtime
+ALTER TABLE public.class_access_logs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Akses publik class access logs" ON public.class_access_logs;
+CREATE POLICY "Akses publik class access logs" ON public.class_access_logs FOR ALL USING (true) WITH CHECK (true);
+
+-- 4. Aktifkan Replica Identity Full untuk Realtime WebSocket
+ALTER TABLE public.class_access_logs REPLICA IDENTITY FULL;
+ALTER TABLE public.activity_logs REPLICA IDENTITY FULL;
+
+-- 5. Tambahkan Tabel ke Publikasi Realtime Supabase
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+      AND schemaname = 'public' 
+      AND tablename = 'class_access_logs'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.class_access_logs;
+  END IF;
+  
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+      AND schemaname = 'public' 
+      AND tablename = 'activity_logs'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.activity_logs;
+  END IF;
+END $$;
+
+-- 6. Muat ulang cache schema PostgREST
+NOTIFY pgrst, 'reload schema';`;
+
 export const OwnerPanel: React.FC = () => {
   const {
     currentUser,
@@ -67,6 +133,10 @@ export const OwnerPanel: React.FC = () => {
     classes,
     tasks,
     users,
+    submissions,
+    classAccessLogs,
+    deleteMemberUser,
+    updateUserDirect,
     forumPosts,
     anonymousMessages,
     feedbacks,
@@ -93,7 +163,7 @@ export const OwnerPanel: React.FC = () => {
     classChats,
   } = useApp();
 
-  type OwnerTab = 'dashboard' | 'admins' | 'kelas' | 'tugas' | 'forum' | 'bank_soal' | 'absensi' | 'anonwall' | 'statistik' | 'kalender' | 'aktivitas' | 'supabase' | 'saran' | 'chat' | 'maintenance' | 'settings';
+  type OwnerTab = 'dashboard' | 'admins' | 'users' | 'kelas' | 'tugas' | 'forum' | 'bank_soal' | 'absensi' | 'anonwall' | 'statistik' | 'kalender' | 'aktivitas' | 'supabase' | 'saran' | 'chat' | 'maintenance' | 'settings';
 
   // Count unread chats for owner
   const unreadOwnerChatsCount = useMemo(() => {
@@ -132,6 +202,13 @@ export const OwnerPanel: React.FC = () => {
         dashboard: 'dashboard',
         admins: 'admins',
         admin: 'admins',
+        users: 'users',
+        user: 'users',
+        tracking: 'users',
+        siswa: 'users',
+        member: 'users',
+        members: 'users',
+        'tracking-user': 'users',
         kelas: 'kelas',
         class: 'kelas',
         classes: 'kelas',
@@ -244,11 +321,20 @@ export const OwnerPanel: React.FC = () => {
       const newTab = getOwnerTabFromUrl();
       setActiveTab(newTab);
     };
+
+    const handleCustomNavigate = (e: any) => {
+      if (e?.detail?.tab) {
+        setActiveTab(e.detail.tab as OwnerTab);
+      }
+    };
+
     window.addEventListener('popstate', handleUrlSync);
     window.addEventListener('hashchange', handleUrlSync);
+    window.addEventListener('rt:navigate-tab', handleCustomNavigate);
     return () => {
       window.removeEventListener('popstate', handleUrlSync);
       window.removeEventListener('hashchange', handleUrlSync);
+      window.removeEventListener('rt:navigate-tab', handleCustomNavigate);
     };
   }, []);
 
@@ -261,7 +347,7 @@ export const OwnerPanel: React.FC = () => {
   // Add Admin & Class Modal states
   const [newClassName, setNewClassName] = useState('');
   const [newAdminName, setNewAdminName] = useState('');
-  const [newAdminEmail, setNewAdminEmail] = useState('');
+  const [newAdminUsername, setNewAdminUsername] = useState('');
   const [newAdminPassword, setNewAdminPassword] = useState('');
   const [newAdminClassCode, setNewAdminClassCode] = useState('');
   const [showAddClassModal, setShowAddClassModal] = useState(false);
@@ -269,7 +355,6 @@ export const OwnerPanel: React.FC = () => {
   // Edit Admin User Modal states
   const [editingAdmin, setEditingAdmin] = useState<User | null>(null);
   const [editAdminName, setEditAdminName] = useState('');
-  const [editAdminEmail, setEditAdminEmail] = useState('');
   const [editAdminPassword, setEditAdminPassword] = useState('');
   const [editAdminClassName, setEditAdminClassName] = useState('');
   const [showEditPassword, setShowEditPassword] = useState(false);
@@ -283,7 +368,6 @@ export const OwnerPanel: React.FC = () => {
 
   // Owner settings state
   const [ownerName, setOwnerName] = useState(currentUser?.name || 'Owner');
-  const [ownerEmail, setOwnerEmail] = useState(currentUser?.email || 'ilhamramaaadan18@gmail.com');
   const [ownerPassword, setOwnerPassword] = useState(currentUser?.password || 'ilhaM@1810');
   const [showOwnerPassword, setShowOwnerPassword] = useState(false);
   const [isSavingOwnerSettings, setIsSavingOwnerSettings] = useState(false);
@@ -291,7 +375,6 @@ export const OwnerPanel: React.FC = () => {
   useEffect(() => {
     if (currentUser && currentUser.role === 'owner') {
       setOwnerName(currentUser.name);
-      setOwnerEmail(currentUser.email || '');
       setOwnerPassword(currentUser.password || '');
     }
   }, [currentUser]);
@@ -303,6 +386,15 @@ export const OwnerPanel: React.FC = () => {
   const [isTestingDb, setIsTestingDb] = useState(false);
   const [dbTestResult, setDbTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [copiedSchema, setCopiedSchema] = useState(false);
+  const [isAccessSqlModalOpen, setIsAccessSqlModalOpen] = useState(false);
+  const [copiedAccessSql, setCopiedAccessSql] = useState(false);
+
+  const handleCopyAccessSql = () => {
+    navigator.clipboard.writeText(ACCESS_REALTIME_SQL);
+    setCopiedAccessSql(true);
+    showToast('Query SQL Realtime Akses berhasil disalin ke clipboard!', 'success');
+    setTimeout(() => setCopiedAccessSql(false), 2500);
+  };
 
   const adminUsers = React.useMemo(() => {
     const seen = new Set<string>();
@@ -316,6 +408,185 @@ export const OwnerPanel: React.FC = () => {
       return true;
     });
   }, [users]);
+
+  // Combined tracking of all users across the system (Owner, Admin, Siswa)
+  const allTrackedUsers = React.useMemo(() => {
+    const map = new Map<string, User>();
+    users.forEach((u) => {
+      const key = u.id || u.username || u.email || u.name;
+      map.set(key, u);
+    });
+    classAccessLogs.forEach((log) => {
+      if (log.studentId && !map.has(log.studentId)) {
+        map.set(log.studentId, {
+          id: log.studentId,
+          name: log.studentName,
+          email: log.studentEmail,
+          role: 'member',
+          classId: log.classId,
+          className: log.className,
+          status: 'active',
+          createdAt: log.accessedAt,
+        });
+      }
+    });
+    return Array.from(map.values());
+  }, [users, classAccessLogs]);
+
+  // Clear any legacy bloated localStorage cache key on mount
+  useEffect(() => {
+    try {
+      localStorage.removeItem('rt_total_overall_logins');
+    } catch {}
+  }, []);
+
+  // Total logins & accesses calculation (Murni Real-Time dari Database)
+  const totalOverallLogins = React.useMemo(() => {
+    const accessLogsCount = classAccessLogs.length;
+    const authLoginsCount = activityLogs.filter(
+      (a) =>
+        a.category === 'auth' ||
+        a.action?.toLowerCase().includes('login') ||
+        a.action?.toLowerCase().includes('masuk')
+    ).length;
+    return accessLogsCount + authLoginsCount;
+  }, [classAccessLogs.length, activityLogs]);
+
+  const totalAccessesToday = React.useMemo(() => {
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayAccessLogs = classAccessLogs.filter(
+      (l) => l.accessedAt && l.accessedAt.startsWith(todayStr)
+    ).length;
+    const todayAuthLogs = activityLogs.filter(
+      (a) =>
+        (a.category === 'auth' ||
+          a.action?.toLowerCase().includes('login') ||
+          a.action?.toLowerCase().includes('masuk')) &&
+        a.timestamp &&
+        a.timestamp.startsWith(todayStr)
+    ).length;
+    return todayAccessLogs + todayAuthLogs;
+  }, [classAccessLogs, activityLogs]);
+
+  // Tracking Filter States
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState<'all' | 'owner' | 'admin' | 'member'>('all');
+  const [userClassFilter, setUserClassFilter] = useState<string>('all');
+  const [userStatusFilter, setUserStatusFilter] = useState<'all' | 'active' | 'suspended'>('all');
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [userToEdit, setUserToEdit] = useState<User | null>(null);
+  const [editUserName, setEditUserName] = useState('');
+  const [editUserPassword, setEditUserPassword] = useState('');
+  const [editUserClassName, setEditUserClassName] = useState('');
+
+  // Filtered tracked users for Tracking Semua User tab
+  const filteredTrackedUsers = useMemo(() => {
+    return allTrackedUsers.filter((u) => {
+      if (userRoleFilter !== 'all' && u.role !== userRoleFilter) return false;
+      if (userStatusFilter !== 'all' && (u.status || 'active') !== userStatusFilter) return false;
+      if (userClassFilter !== 'all') {
+        const userClass = classes.find((c) => c.adminId === u.id || c.id === u.classId);
+        if (u.classId !== userClassFilter && userClass?.id !== userClassFilter) return false;
+      }
+      if (userSearchQuery.trim()) {
+        const q = userSearchQuery.toLowerCase();
+        const userClass = classes.find((c) => c.adminId === u.id || c.id === u.classId);
+        const adminForUser = u.role === 'member'
+          ? users.find((adm) => adm.role === 'admin' && (adm.classId === u.classId || classes.some((c) => c.id === u.classId && c.adminId === adm.id)))
+          : null;
+        const matchesName = u.name?.toLowerCase().includes(q);
+        const matchesUsername = u.username?.toLowerCase().includes(q);
+        const matchesEmail = u.email?.toLowerCase().includes(q);
+        const matchesClass = (u.className?.toLowerCase().includes(q)) || (userClass?.name?.toLowerCase().includes(q)) || (userClass?.code?.toLowerCase().includes(q));
+        const matchesAdmin = adminForUser?.name?.toLowerCase().includes(q);
+        return matchesName || matchesUsername || matchesEmail || matchesClass || matchesAdmin;
+      }
+      return true;
+    });
+  }, [allTrackedUsers, userRoleFilter, userStatusFilter, userClassFilter, userSearchQuery, classes, users]);
+
+  const handleOpenEditUserModal = (u: User) => {
+    setUserToEdit(u);
+    setEditUserName(u.name);
+    setEditUserPassword(u.password || '');
+    setEditUserClassName(u.className || '');
+  };
+
+  const handleSaveEditUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!userToEdit || !editUserName.trim()) return;
+
+    await updateUserDirect(userToEdit.id, {
+      name: editUserName.trim(),
+      ...(editUserPassword.trim() ? { password: editUserPassword.trim() } : {}),
+      className: editUserClassName.trim() || userToEdit.className,
+    });
+
+    addActivityLog(
+      currentUser?.name || 'Owner',
+      'owner',
+      'Pembaruan Data Pengguna',
+      `Owner memperbarui profil pengguna ${editUserName.trim()} (${userToEdit.role})`,
+      'auth'
+    );
+
+    showToast(`Data akun ${editUserName.trim()} berhasil diperbarui!`, 'success');
+    setUserToEdit(null);
+    syncWithSupabase();
+  };
+
+  const handleConfirmDeleteUser = async () => {
+    if (!userToDelete) return;
+    const targetName = userToDelete.name;
+    const targetId = userToDelete.id;
+    const targetRole = userToDelete.role;
+    setUserToDelete(null);
+
+    if (targetRole === 'admin') {
+      await deleteAdminUser(targetId);
+    } else {
+      await deleteMemberUser(targetId);
+    }
+
+    addActivityLog(
+      currentUser?.name || 'Owner',
+      'owner',
+      'Hapus Akun Pengguna',
+      `Owner menghapus pengguna ${targetName} (${targetRole})`,
+      'auth'
+    );
+
+    showToast(`Pengguna ${targetName} berhasil dihapus dari sistem.`, 'info');
+  };
+
+  const handleExportUsersCSV = () => {
+    const headers = ['ID Pengguna', 'Nama Lengkap', 'Role', 'Asal Kelas', 'Kode Kelas', 'Admin Kelas', 'Status Akun', 'Tanggal Registrasi'];
+    const rows = filteredTrackedUsers.map((u) => {
+      const userClass = classes.find((c) => c.adminId === u.id || c.id === u.classId);
+      const classAdmin = u.role === 'member'
+        ? users.find((adm) => adm.role === 'admin' && (adm.classId === u.classId || classes.some((c) => c.id === u.classId && c.adminId === adm.id)))
+        : null;
+      return [
+        `"${u.id}"`,
+        `"${u.name || ''}"`,
+        `"${u.role === 'owner' ? 'Owner' : u.role === 'admin' ? 'Admin / Guru' : 'Siswa / Member'}"`,
+        `"${u.className || userClass?.name || '-'}"`,
+        `"${userClass?.code || '-'}"`,
+        `"${classAdmin ? classAdmin.name : u.role === 'admin' ? 'Penanggung Jawab' : '-'}"`,
+        `"${u.status === 'suspended' ? 'Ditangguhkan' : 'Aktif'}"`,
+        `"${u.createdAt ? new Date(u.createdAt).toLocaleDateString('id-ID') : '-'}"`,
+      ].join(',');
+    });
+    const csvContent = 'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `remindtask_audit_users_${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    showToast('Data tracking pengguna berhasil diekspor ke CSV!', 'success');
+  };
 
   interface OwnerMenuItem {
     id: OwnerTab;
@@ -346,6 +617,7 @@ export const OwnerPanel: React.FC = () => {
       items: [
         { id: 'dashboard', label: 'Dashboard', icon: Activity },
         { id: 'admins', label: 'User Admin', icon: Shield },
+        { id: 'users', label: 'Tracking User', icon: Users, iconColor: 'text-pink-400' },
         { id: 'kelas', label: 'Ruang Kelas', icon: Building2 },
         { id: 'tugas', label: 'Semua Tugas', icon: ListTodo },
         { id: 'absensi', label: 'Rekap Absensi Global', icon: QrCode, iconColor: 'text-emerald-400' },
@@ -416,30 +688,26 @@ export const OwnerPanel: React.FC = () => {
       className: editAdminClassName.trim() || editingAdmin.className,
     };
 
-    // Update in Supabase
+    // Update in local state and Supabase profiles table immediately
+    await updateUserDirect(editingAdmin.id, {
+      name: updatedUser.name,
+      password: updatedUser.password,
+      className: updatedUser.className,
+    });
+
+    // Update class name if changed
     const client = getSupabaseClient();
-    if (client) {
+    if (client && editingAdmin.classId && editAdminClassName.trim()) {
       try {
         await client
-          .from('profiles')
+          .from('classes')
           .update({
-            name: updatedUser.name,
-            password: updatedUser.password,
-            class_name: updatedUser.className,
+            name: editAdminClassName.trim(),
+            admin_name: updatedUser.name,
           })
-          .eq('id', editingAdmin.id);
-
-        if (editingAdmin.classId && editAdminClassName.trim()) {
-          await client
-            .from('classes')
-            .update({
-              name: editAdminClassName.trim(),
-              admin_name: updatedUser.name,
-            })
-            .eq('id', editingAdmin.classId);
-        }
+          .eq('id', editingAdmin.classId);
       } catch (err) {
-        console.warn('Supabase update admin error:', err);
+        console.warn('Supabase update class error:', err);
       }
     }
 
@@ -533,29 +801,34 @@ export const OwnerPanel: React.FC = () => {
     }
 
     const finalCode = newAdminClassCode.trim() || generateRandomClassCode();
-    const cleanUsername = newAdminName.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const cleanUsername = (newAdminUsername.trim() || newAdminName.trim().toLowerCase().replace(/\s+/g, '')).toLowerCase().replace(/[^a-z0-9_]/g, '');
 
-    await addAdminUser({
-      name: newAdminName.trim(),
-      username: cleanUsername,
-      password: newAdminPassword.trim() || 'password123',
-      className: newClassName.trim(),
-      classCode: finalCode,
-    });
+    try {
+      await addAdminUser({
+        name: newAdminName.trim(),
+        username: cleanUsername,
+        password: newAdminPassword.trim() || 'password123',
+        className: newClassName.trim(),
+        classCode: finalCode,
+      });
 
-    addActivityLog(
-      currentUser?.name || 'Owner',
-      'owner',
-      'Admin & Kelas Baru Dibuat',
-      `Owner membuat admin ${newAdminName} untuk kelas ${newClassName} (Kode: ${finalCode})`,
-      'admin'
-    );
+      addActivityLog(
+        currentUser?.name || 'Owner',
+        'owner',
+        'Admin & Kelas Baru Dibuat',
+        `Owner membuat admin ${newAdminName} (@${cleanUsername}) untuk kelas ${newClassName} (Kode: ${finalCode})`,
+        'admin'
+      );
 
-    setNewAdminName('');
-    setNewAdminPassword('');
-    setNewClassName('');
-    setNewAdminClassCode('');
-    setShowAddClassModal(false);
+      setNewAdminName('');
+      setNewAdminUsername('');
+      setNewAdminPassword('');
+      setNewClassName('');
+      setNewAdminClassCode('');
+      setShowAddClassModal(false);
+    } catch (err: any) {
+      showToast(err?.message || 'Gagal membuat admin baru. Username mungkin sudah digunakan.', 'warn');
+    }
   };
 
   const handleSaveDbConfig = async (e: React.FormEvent) => {
@@ -933,6 +1206,14 @@ export const OwnerPanel: React.FC = () => {
                       <span>Sinkronkan Data Server</span>
                     </button>
                     <button
+                      onClick={() => setIsAccessSqlModalOpen(true)}
+                      className="px-4 py-3 rounded-2xl bg-[#1d163a] hover:bg-[#281e4f] text-amber-300 hover:text-white font-bold text-xs flex items-center gap-2 border border-amber-500/40 transition-all cursor-pointer shadow-sm"
+                      title="Lihat query SQL untuk memastikan replikasi realtime class_access_logs aktif"
+                    >
+                      <Database className="w-4 h-4 text-amber-400" />
+                      <span>Query SQL Realtime Akses</span>
+                    </button>
+                    <button
                       onClick={handlePurgeOrphans}
                       className="px-4 py-3 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 hover:text-white font-bold text-xs flex items-center gap-2 border border-rose-500/30 transition-all cursor-pointer shadow-sm"
                       title="Hapus otomatis seluruh kelas di Supabase yang sudah tidak memiliki admin aktif"
@@ -944,11 +1225,57 @@ export const OwnerPanel: React.FC = () => {
                 </div>
               </div>
 
-              {/* 5 KPI Metric Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
-                {/* 1. Total Admin */}
+              {/* 6 KPI Metric Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+                {/* 1. Total Akses & Login Keseluruhan (Murni Realtime Database) */}
+                <div 
+                  onClick={() => setActiveTab('users')}
+                  className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-pink-500/50 transition-all cursor-pointer group"
+                  title="Klik untuk melihat rincian tracking akses semua user secara realtime dari database"
+                >
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-md shadow-amber-500/20 group-hover:scale-105 transition-transform">
+                      <LogIn className="w-5 h-5" />
+                    </div>
+                    <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 text-[9px] font-bold border border-emerald-500/20">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Live DB
+                    </span>
+                  </div>
+                  <span className="text-3xl font-extrabold text-white font-mono tabular-nums block">
+                    {totalOverallLogins}
+                  </span>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-xs text-slate-400">Total Akses / Login</span>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                      +{totalAccessesToday} hari ini
+                    </span>
+                  </div>
+                </div>
+
+                {/* 2. Total Semua User (Request 4) */}
+                <div 
+                  onClick={() => setActiveTab('users')}
+                  className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-pink-500/50 transition-all cursor-pointer group"
+                  title="Klik untuk melihat data tracking seluruh user"
+                >
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white mb-3 shadow-md shadow-pink-500/20 group-hover:scale-105 transition-transform">
+                    <Users className="w-5 h-5" />
+                  </div>
+                  <span className="text-3xl font-extrabold text-white font-mono tabular-nums block">
+                    {allTrackedUsers.length}
+                  </span>
+                  <div className="flex items-center justify-between mt-1">
+                    <span className="text-xs text-slate-400">Total User</span>
+                    <span className="text-[10px] text-pink-400 font-mono font-bold">
+                      {allTrackedUsers.filter((u) => u.role === 'member').length} Siswa
+                    </span>
+                  </div>
+                </div>
+
+                {/* 3. Total Admin */}
                 <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-[#3d3266] transition-all">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-rose-600 flex items-center justify-center text-white mb-3 shadow-md shadow-pink-500/20">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-500 to-rose-600 flex items-center justify-center text-white mb-3 shadow-md shadow-purple-500/20">
                     <Shield className="w-5 h-5" />
                   </div>
                   <span className="text-3xl font-extrabold text-white font-mono tabular-nums block">
@@ -957,9 +1284,9 @@ export const OwnerPanel: React.FC = () => {
                   <span className="text-xs text-slate-400 mt-1 block">Total Admin</span>
                 </div>
 
-                {/* 2. Total Kelas */}
+                {/* 4. Total Kelas */}
                 <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-[#3d3266] transition-all">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white mb-3 shadow-md shadow-pink-500/20">
+                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-indigo-600 flex items-center justify-center text-white mb-3 shadow-md shadow-pink-500/20">
                     <Building2 className="w-5 h-5" />
                   </div>
                   <span className="text-3xl font-extrabold text-white font-mono tabular-nums block">
@@ -968,7 +1295,7 @@ export const OwnerPanel: React.FC = () => {
                   <span className="text-xs text-slate-400 mt-1 block">Total Kelas</span>
                 </div>
 
-                {/* 3. Total Tugas */}
+                {/* 5. Total Tugas */}
                 <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-[#3d3266] transition-all">
                   <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-pink-500 to-fuchsia-600 flex items-center justify-center text-white mb-3 shadow-md shadow-pink-500/20">
                     <ListTodo className="w-5 h-5" />
@@ -979,18 +1306,7 @@ export const OwnerPanel: React.FC = () => {
                   <span className="text-xs text-slate-400 mt-1 block">Total Tugas</span>
                 </div>
 
-                {/* 4. Online Sekarang */}
-                <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-[#3d3266] transition-all">
-                  <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-purple-500 to-indigo-600 flex items-center justify-center text-white mb-3 shadow-md shadow-purple-500/20">
-                    <BarChart3 className="w-5 h-5" />
-                  </div>
-                  <span className="text-3xl font-extrabold text-white font-mono tabular-nums block">
-                    {realOnlineUsers}
-                  </span>
-                  <span className="text-xs text-slate-400 mt-1 block">Online Sekarang</span>
-                </div>
-
-                {/* 5. Status Server Supabase */}
+                {/* 6. Status Server Supabase */}
                 <div className="p-5 rounded-3xl bg-[#141126] border border-[#272144] hover:border-[#3d3266] transition-all">
                   <div className="w-10 h-10 rounded-2xl bg-gradient-to-tr from-emerald-500 to-teal-600 flex items-center justify-center text-white mb-3 shadow-md shadow-emerald-500/20">
                     <Server className="w-5 h-5" />
@@ -1389,7 +1705,12 @@ export const OwnerPanel: React.FC = () => {
                                 {admin.name.charAt(0)}
                               </div>
                               <div>
-                                <span className="font-bold text-white block">{admin.name}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold text-white block">{admin.name}</span>
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-pink-500/20 text-pink-300 border border-pink-500/30">
+                                    {getTerminology(admin.educatorType || adminClass?.educatorType).educatorTitle}
+                                  </span>
+                                </div>
                                 <span className="text-[10px] text-slate-500">ID: {admin.id}</span>
                               </div>
                             </td>
@@ -1476,6 +1797,378 @@ export const OwnerPanel: React.FC = () => {
                                 <Trash2 className="w-3.5 h-3.5" />
                                 <span>Hapus</span>
                               </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* TAB: TRACKING SEMUA USER (REQUEST 4 & 5) */}
+          {activeTab === 'users' && (
+            <div className="space-y-6">
+              {/* Header Box */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-[#141126] border border-[#272144] p-5 sm:p-6 rounded-3xl">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="p-1.5 rounded-xl bg-pink-500/20 text-pink-400">
+                      <Users className="w-5 h-5" />
+                    </span>
+                    <h3 className="text-xl font-bold text-white">Tracking User</h3>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Lacak identitas seluruh user, asal kelas, admin pembimbing terkait, serta kontrol status akun (aktif / suspend)
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    onClick={handleExportUsersCSV}
+                    className="px-3.5 py-2 rounded-xl bg-[#1d1736] hover:bg-[#28204b] border border-[#312558] text-slate-300 hover:text-white text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer"
+                    title="Unduh file spreadsheet CSV data semua user"
+                  >
+                    <FileText className="w-4 h-4 text-pink-400" />
+                    <span>Ekspor CSV</span>
+                  </button>
+                  <button
+                    onClick={handleOpenAddAdminModal}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white font-bold text-xs flex items-center gap-1.5 shadow-md shadow-pink-500/20 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Tambah Akun Baru</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* 4 Summary Stat Mini-Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5">
+                <div className="p-4 rounded-2xl bg-[#141126] border border-[#272144]">
+                  <span className="text-xs text-slate-400 block mb-1">Total Semua User</span>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-2xl font-black text-white font-mono">{allTrackedUsers.length}</span>
+                    <span className="text-[10px] font-mono text-purple-400 font-bold">100% Terdaftar</span>
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#141126] border border-[#272144]">
+                  <span className="text-xs text-slate-400 block mb-1">Siswa / Member</span>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-2xl font-black text-pink-400 font-mono">
+                      {allTrackedUsers.filter((u) => u.role === 'member').length}
+                    </span>
+                    <span className="text-[10px] font-mono text-pink-300 font-bold">Siswa Aktif</span>
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#141126] border border-[#272144]">
+                  <span className="text-xs text-slate-400 block mb-1">Guru & Admin Kelas</span>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-2xl font-black text-purple-300 font-mono">
+                      {allTrackedUsers.filter((u) => u.role === 'admin').length}
+                    </span>
+                    <span className="text-[10px] font-mono text-purple-400 font-bold">Pengelola</span>
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl bg-[#141126] border border-[#272144]">
+                  <span className="text-xs text-slate-400 block mb-1">Akun Ditangguhkan</span>
+                  <div className="flex items-baseline justify-between">
+                    <span className="text-2xl font-black text-red-400 font-mono">
+                      {allTrackedUsers.filter((u) => (u.status || 'active') === 'suspended').length}
+                    </span>
+                    <span className="text-[10px] font-mono text-red-300 font-bold">Suspended</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Filter and Search Bar */}
+              <div className="bg-[#141126] border border-[#272144] p-4 rounded-3xl flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={userSearchQuery}
+                    onChange={(e) => setUserSearchQuery(e.target.value)}
+                    placeholder="Cari nama siswa/admin, username, email, nama kelas, atau nama pembimbing..."
+                    className="w-full bg-[#1b1533] border border-[#2b214d] rounded-2xl pl-10 pr-4 py-2.5 text-xs text-white placeholder:text-slate-500 outline-none focus:border-pink-500 transition-colors"
+                  />
+                  {userSearchQuery && (
+                    <button
+                      onClick={() => setUserSearchQuery('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white text-xs"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap">
+                  {/* Role Filter */}
+                  <select
+                    value={userRoleFilter}
+                    onChange={(e: any) => setUserRoleFilter(e.target.value)}
+                    className="bg-[#1b1533] border border-[#2b214d] rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-pink-500 cursor-pointer"
+                  >
+                    <option value="all">Semua Peran (Role)</option>
+                    <option value="member">Siswa / Member</option>
+                    <option value="admin">Admin / Guru</option>
+                    <option value="owner">Owner Platform</option>
+                  </select>
+
+                  {/* Class Filter */}
+                  <select
+                    value={userClassFilter}
+                    onChange={(e) => setUserClassFilter(e.target.value)}
+                    className="bg-[#1b1533] border border-[#2b214d] rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-pink-500 cursor-pointer max-w-[180px] truncate"
+                  >
+                    <option value="all">Semua Kelas</option>
+                    {classes.map((cls) => (
+                      <option key={cls.id} value={cls.id}>
+                        {cls.name} ({cls.code})
+                      </option>
+                    ))}
+                  </select>
+
+                  {/* Status Filter */}
+                  <select
+                    value={userStatusFilter}
+                    onChange={(e: any) => setUserStatusFilter(e.target.value)}
+                    className="bg-[#1b1533] border border-[#2b214d] rounded-xl px-3 py-2 text-xs text-slate-200 outline-none focus:border-pink-500 cursor-pointer"
+                  >
+                    <option value="all">Semua Status</option>
+                    <option value="active">Aktif</option>
+                    <option value="suspended">Ditangguhkan</option>
+                  </select>
+
+                  {(userSearchQuery || userRoleFilter !== 'all' || userClassFilter !== 'all' || userStatusFilter !== 'all') && (
+                    <button
+                      onClick={() => {
+                        setUserSearchQuery('');
+                        setUserRoleFilter('all');
+                        setUserClassFilter('all');
+                        setUserStatusFilter('all');
+                      }}
+                      className="px-2.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white text-xs font-semibold transition-colors"
+                      title="Reset filter"
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Tracking Table */}
+              <div className="bg-[#141126] border border-[#272144] rounded-3xl p-5 overflow-x-auto shadow-sm">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-[#261f44] text-slate-400">
+                      <th className="pb-3 font-semibold">Identitas Pengguna</th>
+                      <th className="pb-3 font-semibold">Peran (Role)</th>
+                      <th className="pb-3 font-semibold">Asal Kelas &amp; Kode</th>
+                      <th className="pb-3 font-semibold">Admin / Pembimbing</th>
+                      <th className="pb-3 font-semibold">Akses / Sesi</th>
+                      <th className="pb-3 font-semibold">Status Akun</th>
+                      <th className="pb-3 font-semibold text-right">Aksi Owner</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-[#201938]">
+                    {filteredTrackedUsers.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="py-16 text-center text-slate-500 text-xs">
+                          Tidak ditemukan pengguna dengan filter pencarian tersebut.
+                        </td>
+                      </tr>
+                    ) : (
+                      filteredTrackedUsers.map((u) => {
+                        const userClass = classes.find(
+                          (c) => c.adminId === u.id || c.id === u.classId
+                        );
+                        const classAdmin =
+                          u.role === 'member'
+                            ? users.find(
+                                (adm) =>
+                                  adm.role === 'admin' &&
+                                  (adm.classId === u.classId ||
+                                    classes.some(
+                                      (c) => c.id === u.classId && c.adminId === adm.id
+                                    ))
+                              )
+                            : null;
+
+                        const isSuspended = u.status === 'suspended';
+                        const accessCount = classAccessLogs.filter(
+                          (l) => l.studentId === u.id
+                        ).length;
+
+                        return (
+                          <tr key={u.id} className="hover:bg-[#1a1436] transition-colors">
+                            {/* 1. Identitas Pengguna */}
+                            <td className="py-3.5 pr-3">
+                              <div className="flex items-center gap-2.5">
+                                <div
+                                  className={`w-9 h-9 rounded-2xl flex items-center justify-center font-bold text-xs shrink-0 ${
+                                    u.role === 'owner'
+                                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                      : u.role === 'admin'
+                                      ? 'bg-pink-500/20 text-pink-300 border border-pink-500/30'
+                                      : 'bg-purple-500/20 text-purple-300 border border-purple-500/30'
+                                  }`}
+                                >
+                                  {u.name?.charAt(0)?.toUpperCase() || 'U'}
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-bold text-white block truncate max-w-[150px]">
+                                      {u.name}
+                                    </span>
+                                  </div>
+                                  <span className="text-[11px] text-slate-400 font-mono block truncate max-w-[160px]">
+                                    {u.username ? `@${u.username}` : u.email || 'Tanpa Email'}
+                                  </span>
+                                  <span className="text-[9px] text-slate-500 font-mono">
+                                    ID: {u.id}
+                                  </span>
+                                </div>
+                              </div>
+                            </td>
+
+                            {/* 2. Peran / Role */}
+                            <td className="py-3.5 pr-3">
+                              {u.role === 'owner' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold text-[10px]">
+                                  <Crown className="w-3 h-3 text-amber-400" />
+                                  <span>Owner Platform</span>
+                                </span>
+                              ) : u.role === 'admin' ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-pink-500/15 text-pink-300 border border-pink-500/30 font-bold text-[10px]">
+                                  <Shield className="w-3 h-3 text-pink-400" />
+                                  <span>
+                                    {getTerminology(u.educatorType || userClass?.educatorType).educatorTitle}
+                                  </span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-purple-500/15 text-purple-300 border border-purple-500/30 font-bold text-[10px]">
+                                  <UserIcon className="w-3 h-3 text-purple-400" />
+                                  <span>Siswa / Member</span>
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 3. Asal Kelas & Kode */}
+                            <td className="py-3.5 pr-3">
+                              {u.role === 'owner' ? (
+                                <span className="text-slate-500 italic text-[11px]">Semua Kelas (Global)</span>
+                              ) : (
+                                <div className="space-y-0.5">
+                                  <span className="font-semibold text-slate-200 block truncate max-w-[140px]">
+                                    {u.className || userClass?.name || 'Belum Terdaftar Kelas'}
+                                  </span>
+                                  {userClass?.code && (
+                                    <span className="px-1.5 py-0.5 rounded bg-pink-500/15 text-pink-400 font-mono text-[9px] font-bold border border-pink-500/30 inline-block">
+                                      Kode: {userClass.code}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </td>
+
+                            {/* 4. Admin / Pembimbing Terkait */}
+                            <td className="py-3.5 pr-3">
+                              {u.role === 'owner' ? (
+                                <span className="text-slate-400 text-[11px]">-</span>
+                              ) : u.role === 'admin' ? (
+                                <span className="text-pink-300 font-semibold text-[11px] flex items-center gap-1">
+                                  <Shield className="w-3 h-3 text-pink-400" />
+                                  <span>Penanggung Jawab</span>
+                                </span>
+                              ) : classAdmin ? (
+                                <div className="space-y-0.5">
+                                  <span className="font-bold text-white block truncate max-w-[130px]">
+                                    {classAdmin.name}
+                                  </span>
+                                  <span className="text-[10px] text-pink-400 font-mono block">
+                                    @{classAdmin.username || classAdmin.name.toLowerCase().replace(/\s+/g, '')}
+                                  </span>
+                                </div>
+                              ) : userClass?.adminName ? (
+                                <span className="text-slate-300 font-medium text-[11px]">
+                                  {userClass.adminName}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic text-[11px]">Tidak Diketahui</span>
+                              )}
+                            </td>
+
+                            {/* 5. Akses / Sesi */}
+                            <td className="py-3.5 pr-3">
+                              <div className="space-y-0.5">
+                                <span className="font-mono text-slate-300 text-[11px] block">
+                                  {accessCount > 0 ? `${accessCount}x Akses` : 'Akses Tersimpan'}
+                                </span>
+                                <span className="text-[9px] text-slate-500 block">
+                                  {u.createdAt ? new Date(u.createdAt).toLocaleDateString('id-ID') : 'Aktif'}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* 6. Status Akun */}
+                            <td className="py-3.5 pr-3">
+                              {isSuspended ? (
+                                <span className="px-2.5 py-1 rounded-full bg-red-500/15 text-red-400 font-bold font-mono text-[10px] border border-red-500/30 inline-flex items-center gap-1">
+                                  <UserX className="w-3 h-3" />
+                                  <span>DITANGGUHKAN</span>
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-400 font-bold font-mono text-[10px] border border-emerald-500/30 inline-flex items-center gap-1">
+                                  <UserCheck className="w-3 h-3" />
+                                  <span>AKTIF</span>
+                                </span>
+                              )}
+                            </td>
+
+                            {/* 7. Aksi Owner */}
+                            <td className="py-3.5 text-right space-x-1.5 whitespace-nowrap">
+                              {u.role !== 'owner' && (
+                                <>
+                                  <button
+                                    onClick={() => handleOpenEditUserModal(u)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-purple-500/15 text-purple-300 hover:bg-purple-500/25 border border-purple-500/30 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                    title="Edit data pengguna"
+                                  >
+                                    <Edit className="w-3.5 h-3.5" />
+                                    <span>Edit</span>
+                                  </button>
+                                  <button
+                                    onClick={() => toggleUserStatus(u.id)}
+                                    className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1 ${
+                                      isSuspended
+                                        ? 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30'
+                                        : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25 border border-amber-500/30'
+                                    }`}
+                                    title={isSuspended ? 'Aktifkan akun pengguna ini' : 'Tangguhkan akun pengguna ini'}
+                                  >
+                                    {isSuspended ? (
+                                      <>
+                                        <UserCheck className="w-3.5 h-3.5" />
+                                        <span>Aktifkan</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <UserX className="w-3.5 h-3.5" />
+                                        <span>Suspend</span>
+                                      </>
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => setUserToDelete(u)}
+                                    className="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-red-500/15 text-red-400 hover:bg-red-500/25 border border-red-500/30 transition-colors cursor-pointer inline-flex items-center gap-1"
+                                    title="Hapus pengguna ini"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                    <span>Hapus</span>
+                                  </button>
+                                </>
+                              )}
                             </td>
                           </tr>
                         );
@@ -2391,6 +3084,19 @@ export const OwnerPanel: React.FC = () => {
                 />
               </div>
               <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Username Admin (Harus Unik)</label>
+                <input
+                  type="text"
+                  value={newAdminUsername}
+                  onChange={(e) => setNewAdminUsername(e.target.value.toLowerCase().replace(/\s+/g, ''))}
+                  placeholder="Contoh: bu_siti / pak_budi"
+                  className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-xs text-pink-300 font-mono outline-none focus:border-pink-500"
+                />
+                <span className="text-[10px] text-slate-400 mt-0.5 block">
+                  Akan dibuat otomatis dari Nama Admin jika dikosongkan.
+                </span>
+              </div>
+              <div>
                 <label className="block text-xs font-semibold text-slate-300 mb-1">Password Admin</label>
                 <input
                   type="text"
@@ -2521,6 +3227,162 @@ export const OwnerPanel: React.FC = () => {
                 className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/30"
               >
                 Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit User Modal */}
+      {userToEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-[#141126] border border-[#2e2652] rounded-3xl p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-[#251e44]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-purple-500/20 text-purple-300 flex items-center justify-center">
+                  <Edit className="w-4 h-4 text-pink-400" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Edit Profil Pengguna</h3>
+                  <p className="text-xs text-slate-400">ID: {userToEdit.id} ({userToEdit.role})</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setUserToEdit(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditUser} className="space-y-3.5 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Nama Lengkap</label>
+                <input
+                  type="text"
+                  value={editUserName}
+                  onChange={(e) => setEditUserName(e.target.value)}
+                  required
+                  className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-white outline-none focus:border-pink-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Nama Kelas Terkait</label>
+                <input
+                  type="text"
+                  value={editUserClassName}
+                  onChange={(e) => setEditUserClassName(e.target.value)}
+                  placeholder="Contoh: XII IPA 1"
+                  className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-white outline-none focus:border-pink-500"
+                />
+              </div>
+
+              {userToEdit.role === 'admin' && (
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Reset Password</label>
+                  <input
+                    type="text"
+                    value={editUserPassword}
+                    onChange={(e) => setEditUserPassword(e.target.value)}
+                    placeholder="Kosongkan jika tidak diubah"
+                    className="w-full bg-[#1b1633] border border-[#342a5a] rounded-xl px-3.5 py-2 text-white outline-none focus:border-pink-500 font-mono"
+                  />
+                </div>
+              )}
+
+              <div className="pt-3 border-t border-[#261f42] flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setUserToEdit(null)}
+                  className="px-3.5 py-2 text-xs text-slate-300 hover:bg-[#25203f] rounded-xl cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white font-bold text-xs rounded-xl shadow-md cursor-pointer transition-all"
+                >
+                  Simpan Perubahan
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete User Confirmation Modal */}
+      {userToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-[#141126] border border-red-500/30 rounded-3xl p-6 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400 mb-3 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-white text-center mb-1">Hapus Pengguna?</h3>
+            <p className="text-xs text-slate-300 text-center mb-4">
+              Yakin ingin menghapus <strong className="text-white font-semibold">{userToDelete.name}</strong> ({userToDelete.role === 'admin' ? 'Admin' : 'Siswa'}) dari platform?
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setUserToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[#1d1736] text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteUser}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/30 cursor-pointer"
+              >
+                Ya, Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SQL Realtime Access Schema Modal */}
+      {isAccessSqlModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-2xl bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e]">
+              <div className="flex items-center gap-2 text-white">
+                <Database className="w-5 h-5 text-amber-400" />
+                <h3 className="font-bold text-base">Query SQL Supabase - Realtime Total Akses & Login</h3>
+              </div>
+              <button
+                onClick={() => setIsAccessSqlModalOpen(false)}
+                className="p-1 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Jalankan query SQL ini di <strong>Supabase Dashboard → SQL Editor</strong> untuk memastikan tabel <code>class_access_logs</code> dan <code>activity_logs</code> terdaftar di publikasi Realtime Supabase, sehingga setiap akses atau login siswa dan admin langsung terefleksikan detik itu juga ke Dashboard Owner.
+            </p>
+
+            <div className="relative">
+              <pre className="p-4 rounded-2xl bg-[#0a0714] border border-[#2a1d48] text-[11px] font-mono text-amber-300 overflow-x-auto max-h-60 custom-scrollbar whitespace-pre">
+                {ACCESS_REALTIME_SQL}
+              </pre>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setIsAccessSqlModalOpen(false)}
+                className="px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+              >
+                Tutup
+              </button>
+              <button
+                onClick={handleCopyAccessSql}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 text-xs font-bold text-white flex items-center gap-2 shadow-lg shadow-orange-500/20 cursor-pointer"
+              >
+                {copiedAccessSql ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedAccessSql ? 'Tersalin ke Clipboard!' : 'Salin Query SQL'}</span>
               </button>
             </div>
           </div>

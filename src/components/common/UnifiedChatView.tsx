@@ -18,10 +18,12 @@ import {
   ChevronRight,
   ArrowLeft,
   Filter,
+  Trash2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ClassChatItem, User } from '../../types';
 import { formatIndonesianDate, playNotificationSound } from '../../utils/notification';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 interface UnifiedChatViewProps {
   /** Optional initial recipient ID to open directly (e.g. 'admin' or 'owner') */
@@ -35,7 +37,7 @@ interface UnifiedChatViewProps {
 export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   initialTargetUserId,
   title = 'Pusat Pesan & Chat Langsung',
-  subtitle = 'Riwayat percakapan interaktif dengan siswa, admin, dan owner',
+  subtitle,
 }) => {
   const {
     currentUser,
@@ -46,10 +48,16 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
     classChats,
     ownerChats,
     sendClassChatMessage,
+    deleteClassChatMessage,
+    clearChatThread,
     sendOwnerChatMessage,
     markClassChatsAsRead,
     showToast,
   } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
+  const effectiveSubtitle = subtitle || `Riwayat percakapan interaktif dengan ${terms.memberTitlePlural.toLowerCase()}, admin, dan owner`;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedUserId, setSelectedUserId] = useState<string | null>(initialTargetUserId || null);
@@ -59,6 +67,9 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
   const [contactSearchQuery, setContactSearchQuery] = useState('');
   const [contactFilterRole, setContactFilterRole] = useState<'all' | 'owner' | 'admin' | 'member'>('all');
   const [mobileShowThread, setMobileShowThread] = useState(false);
+  const [msgToDelete, setMsgToDelete] = useState<ClassChatItem | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Sync initialTargetUserId when provided or changed
   useEffect(() => {
@@ -402,7 +413,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
             <MessageSquare className="w-5 h-5 text-pink-400" />
             <h3 className="text-lg font-black text-white">{title}</h3>
           </div>
-          <p className="text-xs text-slate-400 font-medium">{subtitle}</p>
+          <p className="text-xs text-slate-400 font-medium">{effectiveSubtitle}</p>
         </div>
 
         <button
@@ -563,7 +574,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                               : 'bg-pink-500/20 text-pink-300 border border-pink-500/30'
                           }`}
                         >
-                          {isOwner ? 'Owner' : isAdmin ? 'Admin' : 'Siswa'}
+                          {isOwner ? 'Owner' : isAdmin ? `Admin (${terms.educatorTitle})` : terms.memberTitle}
                         </span>
                         {thread.otherUserClass && (
                           <span className="text-[10px] text-slate-400 truncate">
@@ -651,13 +662,26 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   </div>
                 </div>
 
-                <button
-                  onClick={() => setShowNewChatModal(true)}
-                  className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#221844] hover:bg-[#30225e] text-pink-300 text-xs font-bold border border-pink-500/20 cursor-pointer transition-colors shrink-0"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Ganti Chat</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  {activeThreadMessages.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowClearConfirm(true)}
+                      className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-semibold cursor-pointer transition-colors flex items-center gap-1.5"
+                      title="Bersihkan seluruh riwayat chat"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Bersihkan Chat</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowNewChatModal(true)}
+                    className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#221844] hover:bg-[#30225e] text-pink-300 text-xs font-bold border border-pink-500/20 cursor-pointer transition-colors shrink-0"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Ganti Chat</span>
+                  </button>
+                </div>
               </div>
 
               {/* Chat Message Scroll Feed */}
@@ -683,13 +707,16 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       msg.senderId === currentUser?.id ||
                       (currentUser?.role === 'owner' && msg.senderRole === 'owner');
 
+                    // Di semua menu chat & pesan (admin, owner, member), pengguna dapat menghapus pesan
+                    const canDelete = true;
+
                     return (
                       <div
                         key={msg.id}
-                        className={`flex flex-col ${isMyMsg ? 'items-end' : 'items-start'}`}
+                        className={`flex flex-col group ${isMyMsg ? 'items-end' : 'items-start'}`}
                       >
                         <div
-                          className={`max-w-[85%] sm:max-w-md p-3.5 rounded-2xl text-xs shadow-md leading-relaxed ${
+                          className={`relative max-w-[85%] sm:max-w-md p-3.5 rounded-2xl text-xs shadow-md leading-relaxed ${
                             isMyMsg
                               ? 'bg-gradient-to-r from-pink-600 to-purple-600 text-white rounded-br-xs'
                               : 'bg-[#1a1435] border border-[#2c2250] text-slate-100 rounded-bl-xs'
@@ -705,8 +732,26 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                             </span>
                           </div>
                           <p className="whitespace-pre-wrap font-medium">{msg.message}</p>
-                          <div className="flex justify-end items-center mt-1">
-                            <CheckCheck className="w-3.5 h-3.5 text-white/70" />
+                          <div className="flex justify-between items-center mt-1.5 pt-1 border-t border-white/10">
+                            {canDelete ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setMsgToDelete(msg);
+                                }}
+                                className="p-1 rounded-md text-red-300 hover:text-white hover:bg-red-500/30 transition-all cursor-pointer flex items-center gap-1 text-[10px]"
+                                title="Hapus pesan ini"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                                <span className="text-[9px]">Hapus</span>
+                              </button>
+                            ) : (
+                              <span />
+                            )}
+                            <div className="flex items-center gap-1">
+                              <CheckCheck className="w-3.5 h-3.5 text-white/70" />
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -748,7 +793,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   Pusat Komunikasi &amp; Chat
                 </h4>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Pilih percakapan dari kotak masuk di samping, atau mulai obrolan baru dengan siswa, admin, atau owner.
+                  Pilih percakapan dari kotak masuk di samping, atau mulai obrolan baru dengan {terms.memberTitlePlural.toLowerCase()}, admin, atau owner.
                 </p>
               </div>
               <button
@@ -796,7 +841,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                   type="text"
                   value={contactSearchQuery}
                   onChange={(e) => setContactSearchQuery(e.target.value)}
-                  placeholder="Cari nama siswa, admin, atau ruang kelas..."
+                  placeholder={`Cari nama ${terms.memberTitle.toLowerCase()}, admin, atau ruang kelas...`}
                   className="w-full bg-[#0d091e] border border-[#2a2050] rounded-xl pl-9 pr-3 py-2 text-xs text-white placeholder:text-slate-500 outline-none focus:border-pink-500 font-medium transition-colors"
                   autoFocus
                 />
@@ -832,7 +877,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       : 'bg-[#1a1435] text-slate-400 hover:text-white'
                   }`}
                 >
-                  🛡️ Admin Kelas
+                  🛡️ Admin ({terms.educatorTitle})
                 </button>
                 <button
                   onClick={() => setContactFilterRole('member')}
@@ -842,7 +887,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                       : 'bg-[#1a1435] text-slate-400 hover:text-white'
                   }`}
                 >
-                  🎓 Siswa / Member
+                  🎓 {terms.memberTitle} / Member
                 </button>
               </div>
             </div>
@@ -895,7 +940,7 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                                   : 'bg-pink-500/20 text-pink-300 border border-pink-500/40'
                               }`}
                             >
-                              {isOwner ? '👑 Owner' : isAdmin ? '🛡️ Admin' : '🎓 Siswa'}
+                              {isOwner ? '👑 Owner' : isAdmin ? `🛡️ Admin (${terms.educatorTitle})` : `🎓 ${terms.memberTitle}`}
                             </span>
                             {contact.className && (
                               <span className="text-[10px] text-slate-400 truncate">
@@ -923,6 +968,88 @@ export const UnifiedChatView: React.FC<UnifiedChatViewProps> = ({
                 className="px-4 py-2 rounded-xl bg-[#201840] hover:bg-[#2b2154] text-slate-300 text-xs font-bold transition-colors cursor-pointer"
               >
                 Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Delete Individual Message */}
+      {msgToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-[#141126] border border-red-500/30 rounded-3xl p-6 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400 mb-3 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-white text-center mb-1">Hapus Pesan?</h3>
+            <p className="text-xs text-slate-300 text-center mb-4 line-clamp-3 bg-[#1b1533] p-2.5 rounded-xl border border-[#2b214f] italic">
+              &ldquo;{msgToDelete.message}&rdquo;
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setMsgToDelete(null)}
+                className="flex-1 py-2.5 rounded-xl bg-[#1d1736] text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={async () => {
+                  if (!msgToDelete) return;
+                  setIsDeleting(true);
+                  try {
+                    await deleteClassChatMessage(msgToDelete.id);
+                  } finally {
+                    setIsDeleting(false);
+                    setMsgToDelete(null);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/30 cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Clear Entire Chat Thread */}
+      {showClearConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-sm bg-[#141126] border border-red-500/30 rounded-3xl p-6 shadow-2xl">
+            <div className="w-12 h-12 rounded-2xl bg-red-500/15 border border-red-500/30 flex items-center justify-center text-red-400 mb-3 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-bold text-white text-center mb-1">Bersihkan Riwayat Chat?</h3>
+            <p className="text-xs text-slate-300 text-center mb-4">
+              Seluruh riwayat obrolan dengan <strong className="text-white">{activeContact?.name}</strong> akan dihapus permanen dari sistem.
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowClearConfirm(false)}
+                className="flex-1 py-2.5 rounded-xl bg-[#1d1736] text-slate-300 hover:text-white text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isDeleting}
+                onClick={async () => {
+                  if (!selectedUserId) return;
+                  setIsDeleting(true);
+                  try {
+                    await clearChatThread(selectedUserId);
+                  } finally {
+                    setIsDeleting(false);
+                    setShowClearConfirm(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-bold shadow-md shadow-red-600/30 cursor-pointer disabled:opacity-50"
+              >
+                {isDeleting ? 'Membersihkan...' : 'Ya, Bersihkan'}
               </button>
             </div>
           </div>

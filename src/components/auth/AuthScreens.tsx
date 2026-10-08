@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -8,10 +8,12 @@ import {
   Crown,
   Eye,
   EyeOff,
+  GraduationCap,
   Key,
   Lock,
   LogIn,
   Mail,
+  School,
   Shield,
   User,
   UserPlus,
@@ -29,6 +31,7 @@ export const AuthScreens: React.FC = () => {
     loginAsAdmin,
     loginAsOwner,
     addAdminUser,
+    checkUsernameAvailability,
     showToast,
     theme,
     deviceAccounts,
@@ -58,6 +61,25 @@ export const AuthScreens: React.FC = () => {
   const [adminRegPassword, setAdminRegPassword] = useState('');
   const [adminRegClassName, setAdminRegClassName] = useState('');
   const [showAdminRegPassword, setShowAdminRegPassword] = useState(false);
+  const [adminRegMainType, setAdminRegMainType] = useState<'dosen' | 'guru' | 'pengurus'>('dosen');
+  const [adminRegPengurusSub, setAdminRegPengurusSub] = useState<'mahasiswa' | 'sekolah'>('mahasiswa');
+  const [usernameCheckStatus, setUsernameCheckStatus] = useState<'idle' | 'checking' | 'available' | 'taken'>('idle');
+
+  useEffect(() => {
+    const clean = adminRegUsername.trim().toLowerCase().replace(/\s+/g, '');
+    if (!clean || clean.length < 3) {
+      setUsernameCheckStatus('idle');
+      return;
+    }
+
+    setUsernameCheckStatus('checking');
+    const timer = setTimeout(async () => {
+      const isAvail = await checkUsernameAvailability(clean);
+      setUsernameCheckStatus(isAvail ? 'available' : 'taken');
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [adminRegUsername, checkUsernameAvailability]);
 
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -174,6 +196,10 @@ export const AuthScreens: React.FC = () => {
       setErrorMessage('Harap masukkan username admin.');
       return;
     }
+    if (usernameCheckStatus === 'taken') {
+      setErrorMessage(`Username "@${adminRegUsername}" sudah digunakan atau tidak tersedia. Silakan gunakan username lain.`);
+      return;
+    }
     if (!adminRegPassword) {
       setErrorMessage('Harap tentukan password admin.');
       return;
@@ -188,12 +214,26 @@ export const AuthScreens: React.FC = () => {
     try {
       const cleanUsername = adminRegUsername.trim().toLowerCase().replace(/\s+/g, '');
       const pwd = adminRegPassword;
+      let finalEducatorType: any = 'dosen';
+      if (adminRegMainType === 'dosen') {
+        finalEducatorType = 'dosen';
+      } else if (adminRegMainType === 'guru') {
+        finalEducatorType = 'guru';
+      } else {
+        finalEducatorType = adminRegPengurusSub === 'mahasiswa' ? 'pengurus_mahasiswa' : 'pengurus_sekolah';
+      }
+
       await addAdminUser({
         name: adminRegName.trim(),
         username: cleanUsername,
         password: pwd,
         className: adminRegClassName.trim(),
+        educatorType: finalEducatorType,
       });
+
+      try {
+        localStorage.setItem('rt_confirmed_educator_' + cleanUsername, finalEducatorType);
+      } catch {}
 
       // Do not auto login - switch to login form with pre-filled username
       setAdminMode('login');
@@ -629,15 +669,36 @@ export const AuthScreens: React.FC = () => {
                     placeholder="Username admin"
                     required
                     className={`w-full ${
-                      isLight
+                      usernameCheckStatus === 'taken'
+                        ? 'bg-rose-500/10 border-rose-500/60 text-white focus:border-rose-500'
+                        : usernameCheckStatus === 'available'
+                        ? 'bg-emerald-500/10 border-emerald-500/60 text-white focus:border-emerald-500'
+                        : isLight
                         ? 'bg-white border-slate-300 text-slate-900 placeholder:text-slate-400 focus:border-pink-500'
                         : 'bg-[#100d20] border-[#342e5a] text-white placeholder:text-slate-500 focus:border-pink-500'
                     } border rounded-xl pl-10 pr-4 py-2.5 text-xs outline-none transition-colors shadow-xs`}
                   />
                 </div>
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  Digunakan untuk login. Gunakan huruf kecil, angka, atau garis bawah (_).
-                </span>
+                {usernameCheckStatus === 'checking' && (
+                  <span className="text-[10px] text-amber-400 mt-1 flex items-center gap-1 font-semibold">
+                    ⏳ Memeriksa ketersediaan username...
+                  </span>
+                )}
+                {usernameCheckStatus === 'taken' && (
+                  <span className="text-[10px] text-rose-400 mt-1 flex items-center gap-1 font-bold animate-in fade-in duration-150">
+                    ❌ Username @{adminRegUsername} TIDAK TERSEDIA (Sudah Digunakan)
+                  </span>
+                )}
+                {usernameCheckStatus === 'available' && (
+                  <span className="text-[10px] text-emerald-400 mt-1 flex items-center gap-1 font-bold animate-in fade-in duration-150">
+                    ✅ Username @{adminRegUsername} TERSEDIA!
+                  </span>
+                )}
+                {usernameCheckStatus === 'idle' && (
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    Digunakan untuk login. Gunakan huruf kecil, angka, atau garis bawah (_).
+                  </span>
+                )}
               </div>
 
               <div>
@@ -669,6 +730,100 @@ export const AuthScreens: React.FC = () => {
                     {showAdminRegPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
+              </div>
+
+              {/* Choice of Educator / Class Leader Role */}
+              <div className="space-y-2 pt-1">
+                <label className={`block text-xs font-semibold ${isLight ? 'text-slate-700' : 'text-slate-300'}`}>
+                  Peran &amp; Jenis Pengelola Kelas <span className="text-pink-500">*</span>
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {/* DOSEN */}
+                  <button
+                    type="button"
+                    onClick={() => setAdminRegMainType('dosen')}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      adminRegMainType === 'dosen'
+                        ? 'bg-pink-500/20 border-pink-500 text-pink-300 font-bold'
+                        : isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-700'
+                        : 'bg-[#100d20] border-[#342e5a] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <GraduationCap className="w-4 h-4 text-pink-400" />
+                    <span className="text-xs">Dosen</span>
+                    <span className="text-[9px] text-slate-400 font-normal">Mahasiswa</span>
+                  </button>
+
+                  {/* GURU */}
+                  <button
+                    type="button"
+                    onClick={() => setAdminRegMainType('guru')}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      adminRegMainType === 'guru'
+                        ? 'bg-pink-500/20 border-pink-500 text-pink-300 font-bold'
+                        : isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-700'
+                        : 'bg-[#100d20] border-[#342e5a] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <School className="w-4 h-4 text-purple-400" />
+                    <span className="text-xs">Guru</span>
+                    <span className="text-[9px] text-slate-400 font-normal">Siswa</span>
+                  </button>
+
+                  {/* PENGURUS KELAS */}
+                  <button
+                    type="button"
+                    onClick={() => setAdminRegMainType('pengurus')}
+                    className={`p-2.5 rounded-xl border text-left flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
+                      adminRegMainType === 'pengurus'
+                        ? 'bg-pink-500/20 border-pink-500 text-pink-300 font-bold'
+                        : isLight
+                        ? 'bg-slate-100 border-slate-300 text-slate-700'
+                        : 'bg-[#100d20] border-[#342e5a] text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Users className="w-4 h-4 text-indigo-400" />
+                    <span className="text-xs text-center">Pengurus</span>
+                    <span className="text-[9px] text-slate-400 font-normal">Ketua Kelas</span>
+                  </button>
+                </div>
+
+                {/* Sub Options if Pengurus is selected */}
+                {adminRegMainType === 'pengurus' && (
+                  <div className="p-3 rounded-xl bg-[#100d20] border border-[#342e5a] space-y-2 animate-in fade-in duration-150 mt-2">
+                    <span className="text-[10px] font-bold text-pink-300 uppercase tracking-wider block">
+                      Sub-Pilihan Jenis Kelas:
+                    </span>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setAdminRegPengurusSub('mahasiswa')}
+                        className={`p-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          adminRegPengurusSub === 'mahasiswa'
+                            ? 'bg-pink-500/30 border-pink-500 text-pink-300'
+                            : 'bg-[#181433] border-[#29224d] text-slate-400'
+                        }`}
+                      >
+                        <GraduationCap className="w-3.5 h-3.5" />
+                        <span>Kelas Mahasiswa</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAdminRegPengurusSub('sekolah')}
+                        className={`p-2 rounded-lg border text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          adminRegPengurusSub === 'sekolah'
+                            ? 'bg-pink-500/30 border-pink-500 text-pink-300'
+                            : 'bg-[#181433] border-[#29224d] text-slate-400'
+                        }`}
+                      >
+                        <School className="w-3.5 h-3.5" />
+                        <span>Kelas Sekolah</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>

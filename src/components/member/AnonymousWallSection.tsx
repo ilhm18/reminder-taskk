@@ -100,7 +100,7 @@ const CARD_GRADIENTS = [
 ];
 
 export const AnonymousWallSection: React.FC = () => {
-  const { currentClass, anonymousMessages, addAnonymousMessage, likeAnonymousMessage, addReplyToAnonymousMessage, showToast } = useApp();
+  const { currentUser, currentClass, anonymousMessages, addAnonymousMessage, likeAnonymousMessage, addReplyToAnonymousMessage, showToast } = useApp();
 
   const [messageInput, setMessageInput] = useState('');
   const [alias, setAlias] = useState('');
@@ -180,6 +180,11 @@ export const AnonymousWallSection: React.FC = () => {
         alias: alias.trim() || 'Siswa Anonim',
         avatarEmoji: avatarEmoji || '🎭',
         cardGradient: selectedGradient,
+        senderId: currentUser?.id,
+        senderName: currentUser?.name || 'Siswa Kelas',
+        senderEmail: currentUser?.email,
+        senderUsername: currentUser?.username,
+        senderRole: currentUser?.role || 'member',
       });
 
       setMessageInput('');
@@ -213,6 +218,9 @@ export const AnonymousWallSection: React.FC = () => {
       authorName: replyAlias.trim() || alias.trim() || 'Siswa Anonim',
       authorEmoji: avatarEmoji || '💬',
       authorRole: 'member',
+      senderId: currentUser?.id,
+      realSenderName: currentUser?.name || 'Siswa Kelas',
+      senderEmail: currentUser?.email,
     });
 
     setReplyingMessageId(null);

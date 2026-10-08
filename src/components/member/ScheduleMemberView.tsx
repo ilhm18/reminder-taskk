@@ -11,6 +11,7 @@ import {
   AlertCircle,
   Flame,
   CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { DayOfWeek, ScheduleItem } from '../../types';
@@ -18,7 +19,8 @@ import { DayOfWeek, ScheduleItem } from '../../types';
 const DAYS_OF_WEEK: DayOfWeek[] = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
 
 export const ScheduleMemberView: React.FC = () => {
-  const { currentClass, schedules } = useApp();
+  const { currentClass, schedules, syncWithSupabase, showToast } = useApp();
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Determine current day of week in Indonesian
   const getTodayDayOfWeek = (): DayOfWeek => {
@@ -38,6 +40,18 @@ export const ScheduleMemberView: React.FC = () => {
   const today = getTodayDayOfWeek();
   const [selectedDay, setSelectedDay] = useState<DayOfWeek>(today);
   const [currentTimeStr, setCurrentTimeStr] = useState('');
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    try {
+      await syncWithSupabase();
+      showToast('Jadwal berhasil disinkronkan dengan database!', 'success');
+    } catch {
+      showToast('Gagal menyinkronkan jadwal.', 'warn');
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 600);
+    }
+  };
 
   useEffect(() => {
     const updateTime = () => {
@@ -68,6 +82,18 @@ export const ScheduleMemberView: React.FC = () => {
     .filter((s) => s.day === today)
     .sort((a, b) => a.startTime.localeCompare(b.startTime));
 
+  // Cek apakah ada jadwal hari ini yang mendekati 2 jam sebelum mulai
+  const upcomingWithin2Hours = todaySchedules.find((item) => {
+    const [hours, mins] = item.startTime.split(':').map(Number);
+    if (isNaN(hours) || isNaN(mins)) return false;
+    const now = new Date();
+    const classTime = new Date(now);
+    classTime.setHours(hours, mins, 0, 0);
+    const diffMs = classTime.getTime() - now.getTime();
+    const diffMinutes = Math.floor(diffMs / (1000 * 60));
+    return diffMinutes > 0 && diffMinutes <= 125;
+  });
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
       {/* Hero Header */}
@@ -80,9 +106,9 @@ export const ScheduleMemberView: React.FC = () => {
               <CalendarDays className="w-7 h-7" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-pink-500/20 text-pink-300 font-bold text-[10px] uppercase tracking-wider border border-pink-500/30">
-                  Jadwal Resmi Kelas: {currentClass?.name || 'Ruang Kelas'}
+                  Kelas: {currentClass?.name || 'Ruang Kelas'} {currentClass?.code ? `(Kode: ${currentClass.code})` : ''}
                 </span>
                 <span className="text-xs font-mono text-emerald-400 font-bold flex items-center gap-1">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
@@ -93,12 +119,57 @@ export const ScheduleMemberView: React.FC = () => {
                 Jadwal Mata Pelajaran &amp; Kuliah
               </h2>
               <p className="text-xs text-slate-300 mt-0.5">
-                Pantau jam pembelajaran harianmu dan dapatkan notifikasi otomatis sebelum kelas dimulai!
+                Pantau jam pembelajaran harianmu dan dapatkan notifikasi otomatis 2 jam sebelum kelas dimulai!
               </p>
             </div>
           </div>
+
+          <div className="flex items-center gap-2 self-stretch md:self-auto">
+            <button
+              onClick={handleRefresh}
+              disabled={isRefreshing}
+              className="px-4 py-2.5 rounded-2xl bg-[#1d1736] hover:bg-[#281f4a] border border-[#35285c] text-xs font-bold text-slate-300 hover:text-white flex items-center gap-2 cursor-pointer shadow-sm transition-all"
+              title="Segarkan data jadwal dari database"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-pink-400' : 'text-slate-400'}`} />
+              <span>{isRefreshing ? 'Menyinkronkan...' : 'Segarkan Jadwal'}</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* 2-HOUR WARNING ALERT BANNER */}
+      {upcomingWithin2Hours && (
+        <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-amber-500/20 via-pink-500/15 to-purple-600/20 border-2 border-amber-500/50 p-5 shadow-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-amber-500 to-pink-500 flex items-center justify-center text-white shrink-0 shadow-lg shadow-amber-500/25">
+              <Clock className="w-6 h-6 animate-pulse" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-amber-500/30 text-amber-200 font-bold text-[10px] uppercase tracking-wider border border-amber-500/40">
+                  ⏰ Mendekati 2 Jam Sebelum Kelas Dimulai
+                </span>
+                <span className="text-xs font-mono text-pink-300 font-bold">
+                  {upcomingWithin2Hours.startTime} WIB
+                </span>
+              </div>
+              <h4 className="text-base font-extrabold text-white mt-1">
+                {upcomingWithin2Hours.subject}
+              </h4>
+              <p className="text-xs text-slate-200">
+                {upcomingWithin2Hours.room ? `Ruang: ${upcomingWithin2Hours.room}` : 'Ruang Kelas'} • Pengampu: {upcomingWithin2Hours.teacherName || 'Guru/Dosen'}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => setSelectedDay(today)}
+            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-pink-600 hover:from-amber-600 text-white font-bold text-xs shrink-0 cursor-pointer shadow-md self-end sm:self-auto"
+          >
+            Buka Jadwal Hari Ini
+          </button>
+        </div>
+      )}
 
       {/* Days of Week Tab Bar */}
       <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
@@ -165,12 +236,22 @@ export const ScheduleMemberView: React.FC = () => {
                 currentTimeStr >= item.startTime &&
                 currentTimeStr <= item.endTime;
 
+              const [hours, mins] = item.startTime.split(':').map(Number);
+              const now = new Date();
+              const classTime = new Date(now);
+              classTime.setHours(hours, mins, 0, 0);
+              const diffMs = classTime.getTime() - now.getTime();
+              const diffMinutes = Math.floor(diffMs / (1000 * 60));
+              const isStartingSoon = selectedDay === today && !isOngoing && diffMinutes > 0 && diffMinutes <= 125;
+
               return (
                 <div
                   key={item.id}
                   className={`p-5 rounded-3xl border flex flex-col justify-between transition-all relative overflow-hidden shadow-lg ${
                     isOngoing
                       ? 'bg-gradient-to-br from-pink-500/20 via-[#181333] to-[#120e24] border-pink-500'
+                      : isStartingSoon
+                      ? 'bg-gradient-to-br from-amber-500/15 via-[#1a1435] to-[#141028] border-amber-500/60 shadow-amber-500/10'
                       : 'bg-[#141126] border-[#292248] hover:border-[#3d2f66]'
                   }`}
                 >
@@ -187,6 +268,10 @@ export const ScheduleMemberView: React.FC = () => {
                       {isOngoing ? (
                         <span className="px-2.5 py-0.5 rounded-full bg-pink-500 text-white text-[10px] font-bold animate-pulse">
                           ● Berlangsung
+                        </span>
+                      ) : isStartingSoon ? (
+                        <span className="px-2.5 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[10px] font-extrabold animate-pulse shadow-xs">
+                          ⏰ Mulai ~{diffMinutes} mnt lagi
                         </span>
                       ) : (
                         <span className="text-[10px] text-slate-500 font-mono font-bold">

@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Task, ClassMaterial } from '../../types';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { AnalyticsView } from '../analytics/AnalyticsView';
 import { CalendarView } from '../calendar/CalendarView';
 import { DailyReportModal } from '../modals/DailyReportModal';
@@ -52,6 +53,7 @@ import { SubmissionModal } from '../modals/SubmissionModal';
 import { AIChatTutor } from './AIChatTutor';
 import { StudyFocusTools } from './StudyFocusTools';
 import { StudentMiniGame } from './StudentMiniGame';
+import { VirtualPetView } from './VirtualPetView';
 import { ScheduleMemberView } from './ScheduleMemberView';
 import { AnonymousWallSection } from './AnonymousWallSection';
 import { CreatorDonationCard } from '../common/CreatorDonationCard';
@@ -88,9 +90,28 @@ export const MemberView: React.FC = () => {
     questionBanks,
     attendanceSessions,
     forumPosts,
+    schedules,
   } = useApp();
 
-  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'jadwal' | 'forum' | 'ai_tutor' | 'fokus' | 'game' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
+
+  // Count today's schedules
+  const todaySchedulesCount = useMemo(() => {
+    const dayNames = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+    const todayName = dayNames[new Date().getDay()];
+    return schedules.filter(
+      (s) =>
+        (!currentClass ||
+          s.classId === currentClass.id ||
+          s.classId === currentClass.code ||
+          (currentClass.name && s.classId === currentClass.name) ||
+          s.classId === 'global') &&
+        s.day === todayName
+    ).length;
+  }, [schedules, currentClass]);
+
+  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'jadwal' | 'forum' | 'ai_tutor' | 'fokus' | 'game' | 'pet' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
 
   // Count unread chats from admin, other students, or owner
   const unreadChatsCount = useMemo(() => {
@@ -161,6 +182,10 @@ export const MemberView: React.FC = () => {
         focus: 'fokus',
         game: 'game',
         games: 'game',
+        pet: 'pet',
+        virtualpet: 'pet',
+        hewan: 'pet',
+        peliharaan: 'pet',
         statistik: 'statistik',
         stats: 'statistik',
         analytics: 'statistik',
@@ -201,6 +226,14 @@ export const MemberView: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<MemberTab>(getMemberTabFromUrl);
 
+  const timeGreeting = useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour >= 4 && hour < 11) return 'Selamat pagi';
+    if (hour >= 11 && hour < 15) return 'Selamat siang';
+    if (hour >= 15 && hour < 18) return 'Selamat sore';
+    return 'Selamat malam';
+  }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem('rt_member_active_tab', activeTab);
@@ -216,13 +249,36 @@ export const MemberView: React.FC = () => {
       const newTab = getMemberTabFromUrl();
       setActiveTab(newTab);
     };
+
+    const handleCustomNavigate = (e: any) => {
+      if (e?.detail?.tab) {
+        setActiveTab(e.detail.tab as MemberTab);
+        if (e.detail.taskId) {
+          const t = tasks.find((tk) => tk.id === e.detail.taskId);
+          if (t) {
+            setSelectedTaskForUpload(t);
+          }
+          setTimeout(() => {
+            const el = document.getElementById(`task-${e.detail.taskId}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              el.classList.add('ring-2', 'ring-pink-500');
+              setTimeout(() => el.classList.remove('ring-2', 'ring-pink-500'), 3000);
+            }
+          }, 350);
+        }
+      }
+    };
+
     window.addEventListener('popstate', handleUrlSync);
     window.addEventListener('hashchange', handleUrlSync);
+    window.addEventListener('rt:navigate-tab', handleCustomNavigate);
     return () => {
       window.removeEventListener('popstate', handleUrlSync);
       window.removeEventListener('hashchange', handleUrlSync);
+      window.removeEventListener('rt:navigate-tab', handleCustomNavigate);
     };
-  }, []);
+  }, [tasks]);
 
   const [selectedTaskForUpload, setSelectedTaskForUpload] = useState<Task | null>(null);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
@@ -259,7 +315,7 @@ export const MemberView: React.FC = () => {
 
   const getCategoryForTab = (tab: MemberTab): 'akademik' | 'hiburan' | 'komunikasi' | 'lainnya' => {
     if (['dashboard', 'tugas', 'absensi', 'bank_soal', 'jadwal', 'kalender', 'statistik', 'fokus'].includes(tab)) return 'akademik';
-    if (['ai_tutor', 'game'].includes(tab)) return 'hiburan';
+    if (['ai_tutor', 'game', 'pet'].includes(tab)) return 'hiburan';
     if (['forum', 'anonwall', 'saran', 'chat_admin', 'chat_owner'].includes(tab)) return 'komunikasi';
     return 'lainnya';
   };
@@ -334,10 +390,16 @@ export const MemberView: React.FC = () => {
     },
     {
       id: 'hiburan',
-      label: 'AI & Game',
+      label: 'AI, Game & Pet',
       icon: Sparkles,
       tabs: [
-        { id: 'ai_tutor', label: 'AI Assistant', icon: Sparkles, iconColor: 'text-amber-300' },
+        {
+          id: 'ai_tutor',
+          label: systemSettings?.isAiMaintenance ? 'AI (Maintenance)' : 'AI Assistant',
+          icon: Sparkles,
+          iconColor: systemSettings?.isAiMaintenance ? 'text-amber-400' : 'text-amber-300',
+        },
+        { id: 'pet', label: 'Virtual Pet', icon: Heart, iconColor: 'text-pink-400' },
         { id: 'game', label: 'Arena Game', icon: Gamepad2, iconColor: 'text-amber-400' },
       ],
     },
@@ -689,7 +751,7 @@ export const MemberView: React.FC = () => {
                       </span>
                     </h4>
                     <p className="text-xs text-slate-300 mt-0.5">
-                      Guru Anda sedang membuka sesi presensi kelas. Segera scan barcode atau masukkan kode presensi sekarang.
+                      {terms.educatorTitle} Anda sedang membuka sesi presensi kelas. Segera scan QR code presensi sekarang.
                     </p>
                   </div>
                 </div>
@@ -722,7 +784,7 @@ export const MemberView: React.FC = () => {
                     </button>
                     <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[#1b1533] border border-[#322656] text-xs font-medium text-slate-300">
                       <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span>Member aktif: <strong className="text-white">{currentUser?.name || 'Siswa'}</strong></span>
+                      <span>Siswa Aktif: <strong className="text-white">{currentUser?.name || 'Siswa'}</strong></span>
                     </div>
                   </div>
                 </div>
@@ -730,9 +792,43 @@ export const MemberView: React.FC = () => {
                 <h2 className="text-3xl sm:text-5xl font-black text-white tracking-tight">
                   {currentClass?.name || 'Kelas Anda'}
                 </h2>
-                <p className="text-sm text-slate-300 mt-2 max-w-2xl leading-relaxed">
-                  Selamat datang. Pantau tugas kelas dan tandai tugas yang sudah kamu kerjakan.
-                </p>
+
+                {/* Engaging Dynamic Welcome Description & Micro-Stats */}
+                <div className="mt-3 max-w-2xl space-y-2">
+                  <p className="text-sm sm:text-base text-slate-200 leading-relaxed font-medium">
+                    {timeGreeting},{' '}
+                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-pink-400 via-purple-300 to-indigo-300 font-bold">
+                      {currentUser?.name || 'Siswa'}
+                    </span>
+                    ! 👋 Selamat datang di ruang kolaborasi belajar{' '}
+                    <strong className="text-white font-bold">{currentClass?.name || 'Kelas Anda'}</strong>.
+                  </p>
+                  
+                  <div className="flex flex-wrap items-center gap-2 pt-0.5 text-xs text-slate-300">
+                    {activeTasksCount > 0 ? (
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 font-semibold shadow-xs">
+                        <Sparkles className="w-3.5 h-3.5 text-pink-400 shrink-0" />
+                        <span>{activeTasksCount} tugas aktif menantimu</span>
+                      </div>
+                    ) : (
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-semibold shadow-xs">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>Seluruh tugas tuntas dikerjakan!</span>
+                      </div>
+                    )}
+
+                    {priorityCount > 0 && (
+                      <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-semibold shadow-xs">
+                        <span>🔥 {priorityCount} prioritas tinggi</span>
+                      </div>
+                    )}
+
+                    <span className="text-slate-400 hidden sm:inline">•</span>
+                    <span className="text-slate-300">
+                      Pantau tugas kelas, isi presensi realtime, dan selesaikan target belajarmu dengan semangat hari ini! 🚀
+                    </span>
+                  </div>
+                </div>
 
                 {/* Stat Boxes Row */}
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5 mt-8">
@@ -850,19 +946,29 @@ export const MemberView: React.FC = () => {
                     <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
                       <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-bold text-emerald-400">
-                      Aktif &amp; Siap ⚡
-                    </span>
+                    {systemSettings?.isAiMaintenance ? (
+                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1 shadow-sm shadow-amber-500/10 animate-pulse">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                        Maintenance
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-bold text-emerald-400 flex items-center gap-1 shadow-sm shadow-emerald-500/10">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Aktif &amp; Siap ⚡
+                      </span>
+                    )}
                   </div>
                   <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
                     AI Personal Assistant
                   </h4>
                   <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    Teman ngobrol pintar &amp; santai. Siap bantu bedah rumus, kodingan, atau curhat belajar kapan saja!
+                    {systemSettings?.isAiMaintenance
+                      ? (systemSettings?.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!') + ' • Sedang tahap perbaikan & pengembangan.'
+                      : 'Teman ngobrol pintar & santai. Siap bantu bedah rumus, kodingan, atau curhat belajar kapan saja!'}
                   </p>
                 </div>
                 <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
-                  <span>Mulai Obrolan AI</span>
+                  <span>{systemSettings?.isAiMaintenance ? 'Lihat Info Maintenance' : 'Mulai Obrolan AI'}</span>
                   <span className="transition-transform group-hover:translate-x-1">→</span>
                 </div>
               </div>
@@ -907,7 +1013,7 @@ export const MemberView: React.FC = () => {
                       <CalendarDays className="w-5 h-5 text-white" />
                     </div>
                     <span className="px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-[9px] font-bold text-cyan-300">
-                      Jadwal Kelas 📅
+                      {todaySchedulesCount > 0 ? `📅 ${todaySchedulesCount} Pelajaran Hari Ini` : 'Jadwal Kelas 📅'}
                     </span>
                   </div>
                   <h4 className="text-base font-black text-white group-hover:text-cyan-300 transition-colors">
@@ -1576,6 +1682,13 @@ export const MemberView: React.FC = () => {
         {activeTab === 'game' && (
           <div className="space-y-4 animate-in fade-in duration-200">
             <StudentMiniGame />
+          </div>
+        )}
+
+        {/* TAB 5B: VIRTUAL PET SAYA */}
+        {activeTab === 'pet' && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            <VirtualPetView />
           </div>
         )}
 

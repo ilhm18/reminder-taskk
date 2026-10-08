@@ -1,4 +1,5 @@
 export type UserRole = 'owner' | 'admin' | 'member';
+export type EducatorType = 'dosen' | 'guru' | 'pengurus_mahasiswa' | 'pengurus_sekolah';
 
 export interface User {
   id: string;
@@ -7,6 +8,7 @@ export interface User {
   email?: string;
   password?: string;
   role: UserRole;
+  educatorType?: EducatorType;
   classId?: string;
   className?: string;
   status: 'active' | 'suspended';
@@ -20,6 +22,7 @@ export interface ClassItem {
   name: string;
   adminId: string;
   adminName: string;
+  educatorType?: EducatorType;
   description?: string;
   memberCount: number;
   accessCountToday: number;
@@ -171,6 +174,10 @@ export interface AnonymousReply {
   authorRole: 'member' | 'admin' | 'owner';
   message: string;
   createdAt: string;
+  senderId?: string;
+  realSenderName?: string;
+  senderEmail?: string;
+  senderRole?: 'member' | 'admin' | 'owner';
 }
 
 export interface AnonymousMessage {
@@ -189,6 +196,11 @@ export interface AnonymousMessage {
   replies?: AnonymousReply[];
   isPinned?: boolean;
   createdAt: string;
+  senderId?: string;
+  senderName?: string;
+  senderEmail?: string;
+  senderUsername?: string;
+  senderRole?: string;
 }
 
 export interface FeedbackItem {

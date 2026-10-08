@@ -22,10 +22,14 @@ import {
   Eye,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { QuestionBankItem, QuizSubmission, QuizSubmissionAnswer } from '../../types';
 
 export const QuestionBankMemberView: React.FC = () => {
   const { currentClass, questionBanks, quizSubmissions, submitQuizAnswers, currentUser, showToast } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   // STRICT SECURITY: Members can ONLY see question banks where status === 'published'
   // Hidden question banks (in persembunyian) are completely filtered out!
@@ -552,7 +556,7 @@ export const QuestionBankMemberView: React.FC = () => {
               Bank Soal &amp; Ujian Kelas
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
-              Kerjakan paket latihan soal, kuis pilihan ganda, dan uraian essay yang telah dibuka oleh guru/admin kelas Anda.
+              Kerjakan paket latihan soal, kuis pilihan ganda, dan uraian essay yang telah dibuka oleh {terms.educatorTitle.toLowerCase()}/admin kelas Anda.
             </p>
           </div>
         </div>
@@ -584,7 +588,7 @@ export const QuestionBankMemberView: React.FC = () => {
           </div>
           <h3 className="text-base font-bold text-white mb-1">Belum Ada Soal yang Dibuka</h3>
           <p className="text-xs text-slate-400 max-w-sm leading-relaxed">
-            Guru atau Admin belum membuka paket soal ujian untuk kelas ini. Paket soal yang masih berada di persembunyian akan muncul di sini setelah dibuka.
+            {terms.educatorTitle} atau Admin belum membuka paket soal ujian untuk kelas ini. Paket soal yang masih berada di persembunyian akan muncul di sini setelah dibuka.
           </p>
         </div>
       ) : (

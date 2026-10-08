@@ -8,9 +8,13 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 export const MemberSettingsView: React.FC = () => {
   const { currentUser, currentClass, showToast, updateMemberProfile } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   const [nameInput, setNameInput] = useState(currentUser?.name || '');
   const [isSaving, setIsSaving] = useState(false);
@@ -103,8 +107,8 @@ export const MemberSettingsView: React.FC = () => {
         {/* Right: Edit Forms & Avatar Uploader */}
         <div className="md:col-span-2 space-y-6">
           <ProfileAvatarUploader
-            title="Foto Profil Siswa"
-            subtitle="Unggah foto Anda agar dapat dilihat oleh guru, admin, dan teman sekelas"
+            title={`Foto Profil ${terms.memberTitle}`}
+            subtitle={`Unggah foto Anda agar dapat dilihat oleh ${terms.educatorTitle.toLowerCase()}, admin, dan teman sekelas`}
           />
 
           <div className="bg-[#141126] border border-[#272144] rounded-3xl p-6 space-y-5 shadow-xl">
@@ -113,7 +117,6 @@ export const MemberSettingsView: React.FC = () => {
                 <User className="w-4 h-4 text-pink-400" />
                 <span>Ubah Informasi Akun</span>
               </h3>
-              <span className="text-[11px] text-slate-400">Tersinkronisasi ke Cloud</span>
             </div>
 
             <form onSubmit={handleSaveAll} className="space-y-4">
@@ -135,24 +138,6 @@ export const MemberSettingsView: React.FC = () => {
                 </div>
                 <p className="text-[10px] text-slate-400 mt-1">
                   Nama ini akan tampil pada papan tugas, peringkat, dan catatan pengumpulan tugas kelas.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                  ID Perangkat Siswa (Device ID)
-                </label>
-                <div className="relative">
-                  <Key className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                  <input
-                    type="text"
-                    disabled
-                    value={currentUser?.id || 'device-local-id'}
-                    className="w-full bg-[#120d24] border border-[#271d47] rounded-xl pl-10 pr-4 py-2.5 text-xs text-slate-400 font-mono cursor-not-allowed"
-                  />
-                </div>
-                <p className="text-[10px] text-slate-500 mt-1">
-                  ID unik perangkat Anda yang terhubung secara aman ke server kelas.
                 </p>
               </div>
 

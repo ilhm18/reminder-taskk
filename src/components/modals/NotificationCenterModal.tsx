@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { AlertTriangle, Bell, Check, CheckCheck, Clock, Mail, RefreshCw, ShieldCheck, Sparkles, Trash2, Volume2, X } from 'lucide-react';
+import { AlertTriangle, Bell, Check, CheckCheck, Clock, Mail, RefreshCw, ShieldCheck, Sparkles, Trash2, Volume2, X, ExternalLink, ChevronRight } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { formatIndonesianDate, playNotificationSound } from '../../utils/notification';
 import { getStoredSupabaseConfig } from '../../services/supabase';
+import { resolveNotificationTarget, executeNotificationNavigation } from '../../utils/notificationTarget';
 
 export const NotificationCenterModal: React.FC = () => {
   const {
@@ -215,23 +216,29 @@ export const NotificationCenterModal: React.FC = () => {
           ) : (
             classNotifications.map((notif) => {
               const isRead = notif.read || isNotificationReadLocally(notif.id, currentUser?.id);
+              const targetInfo = resolveNotificationTarget(notif, currentRole || 'member');
               return (
                 <div
                   key={notif.id}
                   onClick={() => {
-                    markNotificationAsRead(notif.id);
+                    executeNotificationNavigation(notif, currentRole || 'member', {
+                      closeDrawer: () => setIsNotificationDrawerOpen(false),
+                      markAsRead: markNotificationAsRead,
+                      showToast,
+                    });
                     playNotificationSound('beep');
                   }}
-                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group ${
+                  className={`p-3.5 rounded-2xl border transition-all cursor-pointer relative overflow-hidden group hover:border-pink-500/40 active:scale-[0.99] ${
                     isRead
-                      ? 'bg-[#18181a]/80 border-white/5 text-slate-400'
-                      : 'bg-[#222226]/95 border-white/10 text-white shadow-lg'
+                      ? 'bg-[#18181a]/80 border-white/5 text-slate-400 hover:bg-[#202024]'
+                      : 'bg-[#222226]/95 border-white/10 text-white shadow-lg hover:bg-[#28282e]'
                   }`}
+                  title={`Klik untuk membuka ${targetInfo.label}`}
                 >
                   <div className="flex items-start gap-3">
-                    {/* iOS App Icon Tile (Identical to uploaded screenshot style) */}
+                    {/* iOS App Icon Tile */}
                     <div className="shrink-0 mt-0.5">
-                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-500 via-pink-500 to-purple-600 flex items-center justify-center text-white shadow-md shadow-orange-500/20">
+                      <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-orange-500 via-pink-500 to-purple-600 flex items-center justify-center text-white shadow-md shadow-orange-500/20 group-hover:scale-105 transition-transform">
                         <CheckCheck className="w-5 h-5 stroke-[2.2]" />
                       </div>
                     </div>
@@ -248,6 +255,18 @@ export const NotificationCenterModal: React.FC = () => {
                       <p className="text-xs text-slate-300 mt-1 leading-relaxed">
                         {notif.message}
                       </p>
+
+                      {/* Interactive Target Route Pill / Indicator */}
+                      <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[10px]">
+                        <span className="inline-flex items-center gap-1.5 font-bold text-pink-400 group-hover:text-pink-300 transition-colors">
+                          <ExternalLink className="w-3 h-3 text-pink-400" />
+                          <span>{targetInfo.actionDescription} ({targetInfo.label})</span>
+                        </span>
+                        <span className="text-slate-400 group-hover:text-white flex items-center gap-0.5 transition-colors font-medium">
+                          <span>Buka Target</span>
+                          <ChevronRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">

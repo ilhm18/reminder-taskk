@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { QuestionBankItem, QuestionItem, QuestionType, QuizStatus, QuizSubmission } from '../../types';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 export const QuestionBankAdminView: React.FC = () => {
   const {
@@ -38,6 +39,9 @@ export const QuestionBankAdminView: React.FC = () => {
     showToast,
     currentUser,
   } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   // Filter question banks for current class (robust fallback so items are never hidden by mismatched IDs)
   const targetClassId = currentClass?.id || currentUser?.classId || '';
@@ -306,7 +310,7 @@ export const QuestionBankAdminView: React.FC = () => {
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
               Buat paket soal pilihan ganda &amp; essay secara manual. Anda dapat menyimpan soal di{' '}
-              <strong className="text-amber-400">Persembunyian (Rahasia)</strong> sehingga siswa kelas tidak mengetahuinya sampai Anda membukanya!
+              <strong className="text-amber-400">Persembunyian (Rahasia)</strong> sehingga {terms.memberTitle.toLowerCase()} kelas tidak mengetahuinya sampai Anda membukanya!
             </p>
           </div>
 
@@ -488,7 +492,7 @@ export const QuestionBankAdminView: React.FC = () => {
                     ) : (
                       <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] font-black">
                         <Eye className="w-3.5 h-3.5" />
-                        <span>Terbuka untuk Siswa</span>
+                        <span>Terbuka untuk {terms.memberTitle}</span>
                       </div>
                     )}
                   </div>
@@ -523,7 +527,7 @@ export const QuestionBankAdminView: React.FC = () => {
                   {isHidden && (
                     <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 text-[11px] flex items-center gap-2 mb-4">
                       <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-                      <span>Siswa kelas tidak dapat melihat soal ini sampai Anda mengklik tombol "Buka Soal".</span>
+                      <span>{terms.memberTitle} kelas tidak dapat melihat soal ini sampai Anda mengklik tombol "Buka Soal".</span>
                     </div>
                   )}
                 </div>
@@ -543,7 +547,7 @@ export const QuestionBankAdminView: React.FC = () => {
                     {isHidden ? (
                       <>
                         <Unlock className="w-4 h-4 stroke-[2.5]" />
-                        <span>Buka Soal untuk Siswa 🚀</span>
+                        <span>Buka Soal untuk {terms.memberTitle} 🚀</span>
                       </>
                     ) : (
                       <>
@@ -562,7 +566,7 @@ export const QuestionBankAdminView: React.FC = () => {
                         setIsSubmissionsModalOpen(true);
                       }}
                       className="py-2 px-2.5 rounded-xl bg-[#20183f] hover:bg-[#2b2154] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 border border-[#31255c] transition-colors cursor-pointer"
-                      title="Lihat hasil siswa"
+                      title={`Lihat hasil ${terms.memberTitle.toLowerCase()}`}
                     >
                       <Award className="w-3.5 h-3.5 text-amber-400" />
                       <span className="truncate">Hasil ({submissionCount})</span>
@@ -713,7 +717,7 @@ export const QuestionBankAdminView: React.FC = () => {
                             🚫 Hilangkan Durasi Total
                           </span>
                           <span className="text-[10px] text-slate-300 mt-1 leading-tight">
-                            Durasi total hilang, siswa hanya fokus timer per butir soal
+                            Durasi total hilang, {terms.memberTitle.toLowerCase()} hanya fokus timer per butir soal
                           </span>
                         </button>
                       </div>
@@ -740,7 +744,7 @@ export const QuestionBankAdminView: React.FC = () => {
                   {/* Status: Simpan di Persembunyian vs Langsung Buka */}
                   <div>
                     <label className="text-xs font-bold text-slate-300 block mb-1">
-                      Status Visibilitas Siswa
+                      Status Visibilitas {terms.memberTitle}
                     </label>
                     <div className="grid grid-cols-2 gap-2">
                       <button
@@ -766,7 +770,7 @@ export const QuestionBankAdminView: React.FC = () => {
                         }`}
                       >
                         <Eye className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>Buka ke Siswa 🚀</span>
+                        <span>Buka ke {terms.memberTitle} 🚀</span>
                       </button>
                     </div>
                   </div>
@@ -783,7 +787,7 @@ export const QuestionBankAdminView: React.FC = () => {
                         </span>
                       </div>
                       <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
-                        Pilihan untuk membatasi waktu pengerjaan per butir soal. Jika dinonaktifkan, siswa bebas tanpa timer per soal.
+                        Pilihan untuk membatasi waktu pengerjaan per butir soal. Jika dinonaktifkan, {terms.memberTitle.toLowerCase()} bebas tanpa timer per soal.
                       </p>
                     </div>
 
@@ -870,7 +874,7 @@ export const QuestionBankAdminView: React.FC = () => {
                       </div>
 
                       <span className="text-[10px] text-amber-400/90 w-full font-medium">
-                        💡 Catatan: Saat siswa mengerjakan, countdown waktu soal ini akan berjalan. Ketika waktu habis, otomatis lanjut ke soal berikutnya!
+                        💡 Catatan: Saat {terms.memberTitle.toLowerCase()} mengerjakan, countdown waktu soal ini akan berjalan. Ketika waktu habis, otomatis lanjut ke soal berikutnya!
                       </span>
                     </div>
                   )}
@@ -884,7 +888,7 @@ export const QuestionBankAdminView: React.FC = () => {
                     rows={2}
                     value={formDescription}
                     onChange={(e) => setFormDescription(e.target.value)}
-                    placeholder="Instruksi pengerjaan untuk siswa..."
+                    placeholder={`Instruksi pengerjaan untuk ${terms.memberTitle.toLowerCase()}...`}
                     className="w-full px-3.5 py-2 rounded-xl bg-[#120e26] border border-[#291e4f] text-xs text-white focus:outline-none focus:border-pink-500 resize-none"
                   />
                 </div>
@@ -1043,13 +1047,13 @@ export const QuestionBankAdminView: React.FC = () => {
                         /* Essay Answer Key / Guidelines */
                         <div className="pt-1">
                           <label className="text-[11px] font-bold text-purple-300 block mb-1">
-                            Kunci Jawaban / Pedoman Penilaian Essay (Untuk Koreksi Guru):
+                            Kunci Jawaban / Pedoman Penilaian Essay (Untuk Koreksi {terms.educatorTitle}):
                           </label>
                           <textarea
                             rows={2}
                             value={q.essayAnswerKey || ''}
                             onChange={(e) => handleUpdateQuestion(idx, { essayAnswerKey: e.target.value })}
-                            placeholder="Tuliskan kata kunci atau jawaban lengkap yang diharapkan dari siswa..."
+                            placeholder={`Tuliskan kata kunci atau jawaban lengkap yang diharapkan dari ${terms.memberTitle.toLowerCase()}...`}
                             className="w-full px-3 py-2 rounded-xl bg-[#110e26] border border-[#2e2059] text-xs text-slate-200 focus:outline-none focus:border-purple-500 resize-none"
                           />
                         </div>
@@ -1104,7 +1108,7 @@ export const QuestionBankAdminView: React.FC = () => {
                     Hasil Ujian: {selectedQuizForSubmissions.title}
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Daftar siswa yang telah menyelesaikan paket soal ini
+                    Daftar {terms.memberTitlePlural.toLowerCase()} yang telah menyelesaikan paket soal ini
                   </p>
                 </div>
               </div>
@@ -1144,7 +1148,7 @@ export const QuestionBankAdminView: React.FC = () => {
                 {/* Answers breakdown */}
                 <div className="space-y-3">
                   <h5 className="text-xs font-bold text-slate-300 uppercase tracking-wider">
-                    Lembar Jawaban Siswa:
+                    Lembar Jawaban {terms.memberTitle}:
                   </h5>
                   {selectedQuizForSubmissions.questions.map((q, idx) => {
                     const ans = viewingSubmission.answers.find((a) => a.questionId === q.id);
@@ -1168,7 +1172,7 @@ export const QuestionBankAdminView: React.FC = () => {
                         {isMC ? (
                           <div className="p-2.5 rounded-lg bg-[#110e24] text-xs space-y-1">
                             <div className="text-slate-300">
-                              Jawaban Siswa:{' '}
+                              Jawaban {terms.memberTitle}:{' '}
                               <strong className={ans?.isCorrect ? 'text-emerald-400' : 'text-red-400'}>
                                 {ans?.selectedOptionIndex !== undefined ? `${['A', 'B', 'C', 'D'][ans.selectedOptionIndex]}. ${q.options?.[ans.selectedOptionIndex]}` : 'Tidak dijawab'}
                               </strong>
@@ -1181,11 +1185,11 @@ export const QuestionBankAdminView: React.FC = () => {
                           </div>
                         ) : (
                           <div className="p-2.5 rounded-lg bg-[#110e24] text-xs space-y-1">
-                            <span className="text-[10px] text-purple-300 block font-bold">Uraian Jawaban Siswa:</span>
+                            <span className="text-[10px] text-purple-300 block font-bold">Uraian Jawaban {terms.memberTitle}:</span>
                             <p className="text-slate-200 whitespace-pre-wrap">{ans?.essayAnswerText || '(Kosong)'}</p>
                             {q.essayAnswerKey && (
                               <div className="mt-2 pt-2 border-t border-[#251b47] text-[11px] text-slate-400">
-                                <strong>Pedoman Jawaban Guru:</strong> {q.essayAnswerKey}
+                                <strong>Pedoman Jawaban {terms.educatorTitle}:</strong> {q.essayAnswerKey}
                               </div>
                             )}
                           </div>
@@ -1200,7 +1204,7 @@ export const QuestionBankAdminView: React.FC = () => {
                   onClick={() => setViewingSubmission(null)}
                   className="w-full py-2.5 rounded-xl bg-[#1e173d] text-slate-300 text-xs font-bold hover:text-white"
                 >
-                  ← Kembali ke Daftar Nilai Siswa
+                  ← Kembali ke Daftar Nilai {terms.memberTitle}
                 </button>
               </div>
             ) : (
@@ -1208,7 +1212,7 @@ export const QuestionBankAdminView: React.FC = () => {
               <div className="flex-1 overflow-y-auto">
                 {quizSubmissions.filter((qs) => qs.quizId === selectedQuizForSubmissions.id).length === 0 ? (
                   <div className="py-12 text-center text-slate-400">
-                    <p className="text-xs">Belum ada siswa yang mengerjakan paket soal ini.</p>
+                    <p className="text-xs">Belum ada {terms.memberTitle.toLowerCase()} yang mengerjakan paket soal ini.</p>
                   </div>
                 ) : (
                   <div className="space-y-2">

@@ -21,10 +21,11 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
   const { submitTaskEvidence } = useApp();
 
   const [fileName, setFileName] = useState(
-    existingSubmission?.fileName || 'Laporan_Tugas_Saya.pdf'
+    existingSubmission?.fileName || ''
   );
   const [note, setNote] = useState(existingSubmission?.submissionNote || '');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string>(existingSubmission?.fileUrl || '');
 
   if (!isOpen || !task) return null;
 
@@ -35,8 +36,8 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
     e.preventDefault();
     if (isOverdue) return;
 
-    const finalFileName = selectedFile ? selectedFile.name : fileName || 'Dokumen_Pengerjaan.pdf';
-    const computedSize = selectedFile ? formatFileSize(selectedFile.size) : existingSubmission?.fileSize || '1.8 MB';
+    const finalFileName = selectedFile ? selectedFile.name : fileName || (filePreviewUrl ? 'Bukti_Tugas.jpg' : 'Tugas_Tanpa_Lampiran');
+    const computedSize = selectedFile ? formatFileSize(selectedFile.size) : existingSubmission?.fileSize || '0.5 MB';
 
     if (selectedFile) {
       const reader = new FileReader();
@@ -47,7 +48,7 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
       };
       reader.readAsDataURL(selectedFile);
     } else {
-      submitTaskEvidence(task.id, finalFileName, note, existingSubmission?.fileUrl || '', computedSize);
+      submitTaskEvidence(task.id, finalFileName, note, filePreviewUrl || existingSubmission?.fileUrl || '', computedSize);
       onClose();
     }
   };
@@ -57,6 +58,15 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
       const file = e.target.files[0];
       setSelectedFile(file);
       setFileName(file.name);
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          setFilePreviewUrl(ev.target?.result as string);
+        };
+        reader.readAsDataURL(file);
+      } else {
+        setFilePreviewUrl('');
+      }
     }
   };
 
@@ -121,24 +131,63 @@ export const SubmissionModal: React.FC<SubmissionModalProps> = ({
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           {/* File upload drag drop zone */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-              Berkas / Dokumen Tugas
-            </label>
-            <label className="flex flex-col items-center justify-center p-5 border-2 border-dashed border-[#3c3066] hover:border-pink-500/80 rounded-2xl bg-[#17132e] cursor-pointer transition-colors group">
-              <FileUp className="w-8 h-8 text-pink-400/80 group-hover:scale-110 transition-transform mb-2" />
-              <span className="text-xs text-slate-200 font-medium text-center">
-                {selectedFile ? selectedFile.name : fileName || 'Klik untuk pilih berkas atau gambar (Semua format didukung)'}
-              </span>
-              <span className="text-[10px] text-slate-500 mt-1">
-                {selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : 'Maksimal 25MB • Gambar, Dokumen, Arsip'}
-              </span>
-              <input
-                type="file"
-                onChange={handleFileChange}
-                className="hidden"
-                accept="*/*"
-              />
-            </label>
+            <div className="flex items-center justify-between mb-1.5">
+              <label className="text-xs font-semibold text-slate-300">
+                Lampiran / Bukti Foto Pengerjaan Tugas (Opsional)
+              </label>
+              {(selectedFile || filePreviewUrl) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedFile(null);
+                    setFilePreviewUrl('');
+                    setFileName('');
+                  }}
+                  className="text-[10px] text-red-400 hover:text-red-300 font-bold underline cursor-pointer"
+                >
+                  Hapus Lampiran
+                </button>
+              )}
+            </div>
+
+            {filePreviewUrl && filePreviewUrl.startsWith('data:image/') ? (
+              <div className="relative rounded-2xl overflow-hidden border border-[#3c3066] bg-[#17132e] p-3 flex items-center gap-3">
+                <img
+                  src={filePreviewUrl}
+                  alt="Pratinjau Bukti Pengerjaan"
+                  className="w-20 h-20 object-cover rounded-xl border border-pink-500/30 shrink-0"
+                />
+                <div className="flex-1 min-w-0 text-left">
+                  <p className="text-xs font-bold text-white truncate">{selectedFile ? selectedFile.name : fileName || 'Bukti_Foto_Tugas.jpg'}</p>
+                  <p className="text-[10px] text-emerald-400 font-medium mt-0.5">✓ Foto berhasil terlampir</p>
+                  <label className="mt-2 inline-block px-3 py-1 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-pink-300 text-[10px] font-bold border border-pink-500/30 cursor-pointer transition-colors">
+                    Ganti Foto
+                    <input
+                      type="file"
+                      onChange={handleFileChange}
+                      className="hidden"
+                      accept="image/*,application/pdf"
+                    />
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <label className="flex flex-col items-center justify-center p-5 border-2 border-dashed border-[#3c3066] hover:border-pink-500/80 rounded-2xl bg-[#17132e] cursor-pointer transition-colors group">
+                <FileUp className="w-8 h-8 text-pink-400/80 group-hover:scale-110 transition-transform mb-2" />
+                <span className="text-xs text-slate-200 font-medium text-center">
+                  {selectedFile ? selectedFile.name : fileName || 'Klik untuk unggah foto / berkas bukti pengerjaan (Opsional)'}
+                </span>
+                <span className="text-[10px] text-slate-500 mt-1">
+                  {selectedFile ? `${(selectedFile.size / 1024 / 1024).toFixed(2)} MB` : 'Maksimal 25MB • Foto (JPG, PNG, WebP), Dokumen, PDF'}
+                </span>
+                <input
+                  type="file"
+                  onChange={handleFileChange}
+                  className="hidden"
+                  accept="*/*"
+                />
+              </label>
+            )}
           </div>
 
           {/* Quick Simulated Name input */}

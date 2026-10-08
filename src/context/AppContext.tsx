@@ -10,12 +10,13 @@ import {
   INITIAL_QUIZ_SUBMISSIONS,
 } from '../services/mockData';
 import { getStoredSupabaseConfig, getSupabaseClient } from '../services/supabase';
-import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod, ForumPost, ForumCategory, ForumComment } from '../types';
+import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, EducatorType, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod, ForumPost, ForumCategory, ForumComment } from '../types';
 import {
   formatIndonesianDate,
   getTaskDeadlineStatus,
   playNotificationSound,
   playNotificationSoundOnce,
+  registerServiceWorkerForNotifications,
   requestBrowserNotificationPermission,
   sendBrowserPushNotification,
 } from '../utils/notification';
@@ -57,7 +58,14 @@ interface AppContextType {
   addReplyToAnonymousMessage: (
     messageId: string,
     replyText: string,
-    options?: { authorName?: string; authorEmoji?: string; authorRole?: 'member' | 'admin' | 'owner' }
+    options?: {
+      authorName?: string;
+      authorEmoji?: string;
+      authorRole?: 'member' | 'admin' | 'owner';
+      senderId?: string;
+      realSenderName?: string;
+      senderEmail?: string;
+    }
   ) => void;
   togglePinAnonymousMessage: (messageId: string) => void;
   deleteAnonymousMessage: (messageId: string) => void;
@@ -73,15 +81,20 @@ interface AppContextType {
   classAccessLogs: ClassAccessLog[];
   classChats: ClassChatItem[];
   sendClassChatMessage: (recipientId: string, recipientName: string, message: string) => Promise<ClassChatItem>;
+  deleteClassChatMessage: (messageId: string) => Promise<void>;
+  clearChatThread: (targetUserId: string) => Promise<void>;
   markClassChatsAsRead: (otherUserId: string) => void;
   registerAdmin: (name: string, email: string, className: string) => void;
-  addAdminUser: (data: { name: string; username?: string; email?: string; password?: string; className: string; classCode?: string }) => Promise<{ user: User; classItem: ClassItem }>;
+  addAdminUser: (data: { name: string; username?: string; email?: string; password?: string; className: string; classCode?: string; educatorType?: EducatorType }) => Promise<{ user: User; classItem: ClassItem }>;
+  checkUsernameAvailability: (username: string) => Promise<boolean>;
+  confirmAdminEducatorType: (educatorType: EducatorType) => Promise<void>;
   deleteAdminUser: (userId: string) => void;
   deleteMemberUser: (userId: string) => Promise<void>;
   logout: () => void;
   switchRoleQuick: (role: UserRole) => void;
   updateMemberProfile: (updates: { name?: string; email?: string; avatar?: string }) => void;
   updateUserProfile: (updates: { name?: string; email?: string; avatar?: string; password?: string }) => void;
+  updateUserDirect: (userId: string, updates: Partial<User>) => Promise<void>;
 
   // Class & Admin Actions
   selectClass: (classId: string) => void;
@@ -180,7 +193,7 @@ interface AppContextType {
     proofFileName?: string;
     proofFileUrl?: string;
     note?: string;
-    manualCode?: string;
+    verificationToken?: string;
   }) => Promise<{ success: boolean; message: string }>;
   recordAttendance: (
     sessionId: string,
@@ -189,7 +202,9 @@ interface AppContextType {
     note?: string,
     verificationToken?: string,
     coords?: { lat: number; lng: number },
-    overrideStudent?: { id: string; name: string; email?: string }
+    overrideStudent?: { id: string; name: string; email?: string },
+    proofFileUrl?: string,
+    proofFileName?: string
   ) => Promise<{ success: boolean; message: string }>;
   updateAttendanceRecord: (recordId: string, status: AttendanceStatus, note?: string) => Promise<void>;
   deleteAttendanceRecord: (recordId: string) => Promise<void>;
@@ -220,6 +235,7 @@ const STORAGE_KEYS = {
   ATTENDANCE_SESSIONS: 'remindtask_global_v5_attendance_sessions',
   ATTENDANCE_RECORDS: 'remindtask_global_v5_attendance_records',
   FORUM_POSTS: 'remindtask_global_v5_forum_posts',
+  CLASS_CHATS: 'remindtask_global_v5_class_chats',
 };
 
 const isRealEmail = (email?: string): boolean => {
@@ -259,6 +275,28 @@ const parseReplies = (raw: any, replyFromAdmin?: string, replyAt?: string): Anon
   return parsed;
 };
 
+const extractSender = (a: any) => {
+  let senderId = a.sender_id || a.senderId;
+  let senderName = a.sender_name || a.senderName;
+  let senderEmail = a.sender_email || a.senderEmail;
+  let senderUsername = a.sender_username || a.senderUsername;
+  let senderRole = a.sender_role || a.senderRole;
+
+  // Extract from JSONB liked_by_users metadata if dedicated columns are not yet filled or table is pending migration
+  if (!senderName && Array.isArray(a.liked_by_users)) {
+    const metaObj = a.liked_by_users.find((x: any) => x && typeof x === 'object' && x.__sender);
+    if (metaObj && metaObj.__sender) {
+      senderId = senderId || metaObj.__sender.id;
+      senderName = senderName || metaObj.__sender.name;
+      senderEmail = senderEmail || metaObj.__sender.email;
+      senderUsername = senderUsername || metaObj.__sender.username;
+      senderRole = senderRole || metaObj.__sender.role;
+    }
+  }
+
+  return { senderId, senderName, senderEmail, senderUsername, senderRole };
+};
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [classes, setClasses] = useState<ClassItem[]>(() => {
     try {
@@ -277,6 +315,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return [];
     }
   });
+
+  useEffect(() => {
+    registerServiceWorkerForNotifications().catch(() => {});
+  }, []);
 
   useEffect(() => {
     try {
@@ -743,6 +785,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: c.name,
           adminId: c.admin_id,
           adminName: c.admin_name,
+          educatorType: (c.educator_type as EducatorType) || undefined,
           description: c.description || '',
           memberCount: c.member_count || 0,
           accessCountToday: c.access_count_today || 0,
@@ -878,36 +921,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             startTime: s.start_time,
             endTime: s.end_time,
             teacherName: s.teacher_name || '',
-            roomOrLink: s.room_or_link || '',
+            room: s.room_or_link || s.room || '',
             notes: s.notes || '',
-            colorBadge: s.color_badge || '',
+            color: s.color_badge || s.color || '',
             createdAt: s.created_at,
           }));
           setSchedules(mappedSched);
           localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(mappedSched));
         }
-      } catch {}
+      } catch (errSched) {
+        console.warn('Sync schedules error:', errSched);
+      }
 
       // Try syncing anonymous wall if table exists
       try {
         const anonRes = await client.from('anonymous_wall').select('*').order('created_at', { ascending: false }).limit(60);
         if (Array.isArray(anonRes.data)) {
-          const mappedAnon: AnonymousMessage[] = anonRes.data.map((a: any) => ({
-            id: a.id,
-            classId: a.class_id,
-            className: a.class_name || 'Ruang Kelas',
-            message: a.message,
-            tag: a.tag || 'Aspirasi',
-            alias: a.alias || 'Siswa Anonim',
-            avatarEmoji: a.avatar_emoji || '🎭',
-            cardGradient: a.card_gradient || 'from-purple-900/40 to-pink-900/30',
-            likes: a.likes || 0,
-            replyFromAdmin: a.reply_from_admin || undefined,
-            replyAt: a.reply_at || undefined,
-            replies: parseReplies(a.replies, a.reply_from_admin, a.reply_at),
-            isPinned: a.is_pinned ?? false,
-            createdAt: a.created_at,
-          }));
+          const mappedAnon: AnonymousMessage[] = anonRes.data.map((a: any) => {
+            const sender = extractSender(a);
+            return {
+              id: a.id,
+              classId: a.class_id,
+              className: a.class_name || 'Ruang Kelas',
+              message: a.message,
+              tag: a.tag || 'Aspirasi',
+              alias: a.alias || 'Siswa Anonim',
+              avatarEmoji: a.avatar_emoji || '🎭',
+              cardGradient: a.card_gradient || 'from-purple-900/40 to-pink-900/30',
+              likes: a.likes || 0,
+              replyFromAdmin: a.reply_from_admin || undefined,
+              replyAt: a.reply_at || undefined,
+              replies: parseReplies(a.replies, a.reply_from_admin, a.reply_at),
+              isPinned: a.is_pinned ?? false,
+              createdAt: a.created_at,
+              senderId: sender.senderId,
+              senderName: sender.senderName,
+              senderEmail: sender.senderEmail,
+              senderUsername: sender.senderUsername,
+              senderRole: sender.senderRole,
+            };
+          });
           setAnonymousMessages(mappedAnon);
           localStorage.setItem('remindtask_global_v5_anon_messages', JSON.stringify(mappedAnon));
         }
@@ -923,6 +976,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             email: p.email,
             password: p.password || 'password123',
             role: (p.role as UserRole) || 'member',
+            educatorType: (p.educator_type as EducatorType) || (localStorage.getItem('rt_confirmed_educator_' + p.id) as EducatorType) || undefined,
             classId: p.class_id,
             className: p.class_name,
             status: (p.status || 'active') as 'active' | 'suspended',
@@ -973,7 +1027,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       // Sync class_access_logs from Supabase
       try {
         const logsRes = await client.from('class_access_logs').select('*').order('accessed_at', { ascending: false });
-        if (Array.isArray(logsRes.data) && logsRes.data.length > 0) {
+        if (Array.isArray(logsRes.data)) {
           const mappedLogs: ClassAccessLog[] = logsRes.data.map((l: any) => ({
             id: l.id,
             classId: l.class_id,
@@ -1269,6 +1323,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             deviceInfo: r.device_info || undefined,
             verificationMethod: (r.verification_method || 'qr_scan') as any,
             note: r.note || undefined,
+            proofFileUrl: r.proof_file_url || undefined,
+            proofFileName: r.proof_file_name || undefined,
             locationVerified: r.location_verified ?? false,
             createdAt: r.created_at,
           }));
@@ -1414,13 +1470,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       fetch('/api/check-upcoming-deadlines', { method: 'POST' }).catch(() => {});
     };
     checkDeadlines(); // check on startup
-    const deadlineInterval = setInterval(checkDeadlines, 240000); // every 4 minutes
+    const deadlineInterval = setInterval(checkDeadlines, 60000); // every 1 minute
+
+    // Automated 1-day deadline reminder check (H-1 sebelum batas waktu)
+    const checkOneDayDeadlines = () => {
+      try {
+        const storedTasksStr = localStorage.getItem(STORAGE_KEYS.TASKS);
+        const taskList: Task[] = storedTasksStr ? JSON.parse(storedTasksStr) : [];
+        if (!Array.isArray(taskList) || taskList.length === 0) return;
+
+        const nowMs = Date.now();
+        const oneDayMs = 24 * 60 * 60 * 1000;
+
+        taskList.forEach((t) => {
+          if (!t.dueDate) return;
+          const dueMs = new Date(t.dueDate).getTime();
+          const diffMs = dueMs - nowMs;
+
+          // 1 hari sebelum jadwal (dalam rentang 24 jam ke depan)
+          if (diffMs > 0 && diffMs <= oneDayMs) {
+            const reminderKey = `rt_notif_1day_${t.id}`;
+            const alreadyAlerted = localStorage.getItem(reminderKey);
+            if (!alreadyAlerted) {
+              localStorage.setItem(reminderKey, 'true');
+              const hoursLeft = Math.max(1, Math.round(diffMs / (60 * 60 * 1000)));
+              const notifTitle = `⏰ Pengingat: Tugas Berakhir Besok! (H-1)`;
+              const notifBody = `Tugas "${t.title}" tersisa ${hoursLeft} jam lagi (Deadline: ${formatIndonesianDate(t.dueDate)}). Segera selesaikan dan kumpulkan!`;
+
+              sendCustomNotification(
+                notifTitle,
+                notifBody,
+                'deadline_soon',
+                t.classId,
+                t.id,
+                'member'
+              );
+
+              sendBrowserPushNotification(
+                notifTitle,
+                notifBody,
+                `deadline-${t.id}`
+              );
+            }
+          }
+        });
+      } catch (err) {
+        console.warn('1-day deadline reminder error:', err);
+      }
+    };
+    checkOneDayDeadlines();
+    const oneDayInterval = setInterval(checkOneDayDeadlines, 30000);
 
     const client = getSupabaseClient();
     if (!client) {
       return () => {
         clearInterval(syncInterval);
         clearInterval(deadlineInterval);
+        clearInterval(oneDayInterval);
       };
     }
 
@@ -1695,6 +1801,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       )
       .on(
         'postgres_changes',
+        { event: '*', schema: 'public', table: 'class_access_logs' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const l = payload.new as any;
+            const newLog: ClassAccessLog = {
+              id: l.id,
+              classId: l.class_id,
+              className: l.class_name,
+              classCode: l.class_code,
+              studentId: l.student_id,
+              studentName: l.student_name,
+              studentEmail: l.student_email,
+              accessedAt: l.accessed_at || l.created_at || new Date().toISOString(),
+              deviceInfo: l.device_info || 'Smartphone/Desktop',
+            };
+            setClassAccessLogs((prev) => {
+              if (prev.some((x) => x.id === newLog.id)) return prev;
+              const updated = [newLog, ...prev];
+              try {
+                localStorage.setItem('rt_class_access_logs', JSON.stringify(updated));
+              } catch {}
+              return updated;
+            });
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as any).id;
+            setClassAccessLogs((prev) => {
+              const updated = prev.filter((x) => x.id !== oldId);
+              try {
+                localStorage.setItem('rt_class_access_logs', JSON.stringify(updated));
+              } catch {}
+              return updated;
+            });
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
         { event: '*', schema: 'public', table: 'notifications' },
         (payload) => {
           if (payload.eventType === 'INSERT') {
@@ -1763,16 +1906,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               subject: s.subject,
               startTime: s.start_time,
               endTime: s.end_time,
-              teacherName: s.teacher_name,
-              room: s.room_or_link,
-              notes: s.notes,
-              color: s.color_badge,
+              teacherName: s.teacher_name || '',
+              room: s.room_or_link || s.room || '',
+              notes: s.notes || '',
+              color: s.color_badge || s.color || '',
               createdAt: s.created_at || new Date().toISOString(),
             };
-            setSchedules((prev) => [schedObj, ...prev.filter((x) => x.id !== schedObj.id)]);
+            setSchedules((prev) => {
+              const updated = [schedObj, ...prev.filter((x) => x.id !== schedObj.id)];
+              try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
-            setSchedules((prev) => prev.filter((x) => x.id !== oldId));
+            setSchedules((prev) => {
+              const updated = prev.filter((x) => x.id !== oldId);
+              try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
           }
         }
       )
@@ -1783,6 +1934,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const a = payload.new as any;
             const parsedReplies = parseReplies(a.replies, a.reply_from_admin, a.reply_at);
+            const sender = extractSender(a);
             const anonObj: AnonymousMessage = {
               id: a.id,
               classId: a.class_id,
@@ -1798,11 +1950,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               replies: parsedReplies,
               isPinned: a.is_pinned ?? false,
               createdAt: a.created_at,
+              senderId: sender.senderId,
+              senderName: sender.senderName,
+              senderEmail: sender.senderEmail,
+              senderUsername: sender.senderUsername,
+              senderRole: sender.senderRole,
             };
-            setAnonymousMessages((prev) => [anonObj, ...prev.filter((x) => x.id !== anonObj.id)]);
+            setAnonymousMessages((prev) => {
+              const updated = [anonObj, ...prev.filter((x) => x.id !== anonObj.id)];
+              try { localStorage.setItem('remindtask_global_v5_anon_messages', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
-            setAnonymousMessages((prev) => prev.filter((x) => x.id !== oldId));
+            setAnonymousMessages((prev) => {
+              const updated = prev.filter((x) => x.id !== oldId);
+              try { localStorage.setItem('remindtask_global_v5_anon_messages', JSON.stringify(updated)); } catch {}
+              return updated;
+            });
           }
         }
       )
@@ -2035,6 +2200,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       clearInterval(syncInterval);
       clearInterval(deadlineInterval);
+      clearInterval(oneDayInterval);
       client.removeChannel(channel);
     };
   }, []);
@@ -2151,7 +2317,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const currentDay = dayMap[now.getDay()];
       const todayDateStr = now.toISOString().split('T')[0];
 
-      const todaySchedules = schedules.filter((s) => s.classId === currentClass.id && s.day === currentDay);
+      const todaySchedules = schedules.filter(
+        (s) =>
+          (s.classId === currentClass.id ||
+            s.classId === currentClass.code ||
+            (currentClass.name && s.classId === currentClass.name) ||
+            s.classId === 'global') &&
+          s.day === currentDay
+      );
 
       todaySchedules.forEach((item) => {
         const [hours, mins] = item.startTime.split(':').map(Number);
@@ -2163,21 +2336,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const diffMs = classTime.getTime() - now.getTime();
         const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
-        // Trigger when within 100 to 125 minutes (around 2 hours prior)
-        if (diffMinutes >= 100 && diffMinutes <= 125) {
+        // Trigger ketika jadwal sudah mendekati 2 jam lagi atau dalam rentang 2 jam sebelum jadwal dimulai
+        if (diffMinutes > 0 && diffMinutes <= 125) {
           const notifiedKey = `remindtask_sched_notif_${item.id}_${todayDateStr}`;
           if (!localStorage.getItem(notifiedKey)) {
             localStorage.setItem(notifiedKey, 'true');
-            const title = `⏰ Pengingat: 2 Jam Menuju ${item.subject}`;
-            const msg = `Pelajaran ${item.subject} akan dimulai pada pukul ${item.startTime} WIB di ${item.room || 'ruang kelas'}. Pengampu: ${item.teacherName || 'Guru/Dosen'}.`;
-            sendBrowserPushNotification(title, msg);
+            const title = `⏰ Pengingat: 2 Jam Sebelum Kelas ${item.subject}!`;
+            const msg = `Mata pelajaran/kuliah "${item.subject}" akan dimulai pada pukul ${item.startTime} WIB (${diffMinutes} menit lagi) di ${item.room || 'ruang kelas'}. Pengampu: ${item.teacherName || 'Guru/Dosen'}.`;
+            
+            // 1. Kirim notifikasi in-app, banner pop-up iOS, suara chime, dan simpan ke Supabase
+            sendCustomNotification(title, msg, 'broadcast', item.classId, undefined, 'all');
+
+            // 2. Kirim notifikasi sistem browser push
+            sendBrowserPushNotification(title, msg, `sched-${item.id}`);
           }
         }
       });
     };
 
     checkUpcomingClasses();
-    const interval = setInterval(checkUpcomingClasses, 60000);
+    const interval = setInterval(checkUpcomingClasses, 30000);
     return () => clearInterval(interval);
   }, [schedules, currentClass]);
 
@@ -2342,6 +2520,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setUsers((prev) => [ownerObj, ...prev.filter((u) => u.id !== ownerObj.id && u.role !== 'owner')]);
           setActiveTab('dashboard');
           try { localStorage.setItem('rt_owner_active_tab', 'dashboard'); } catch {}
+          addActivityLog(ownerObj.name, 'owner', 'Login Akun Owner', 'Owner berhasil login ke sistem.', 'auth');
           if (!silent) showToast(`Selamat datang di Owner Control Center, ${ownerObj.name}!`, 'success');
           playNotificationSound('chime');
           syncWithSupabase();
@@ -2586,6 +2765,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             .or(`admin_id.eq.${dbAdmin.id},id.eq.${dbAdmin.class_id || '_none_'}`)
             .maybeSingle();
 
+          const derivedUsername = dbAdmin.username || (dbAdmin.email ? dbAdmin.email.split('@')[0] : dbAdmin.name.toLowerCase().replace(/\s+/g, ''));
+          const resolvedEducatorType: EducatorType =
+            (dbAdmin.educator_type as EducatorType) ||
+            (adminClass?.educator_type as EducatorType) ||
+            (localStorage.getItem('rt_confirmed_educator_' + dbAdmin.id) as EducatorType) ||
+            (localStorage.getItem('rt_confirmed_educator_' + derivedUsername) as EducatorType) ||
+            (localStorage.getItem('rt_confirmed_educator_' + trimmed) as EducatorType) ||
+            'dosen';
+
           if (adminClass) {
             managedClass = {
               id: adminClass.id,
@@ -2593,6 +2781,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               name: adminClass.name,
               adminId: adminClass.admin_id,
               adminName: adminClass.admin_name,
+              educatorType: (adminClass.educator_type as EducatorType) || resolvedEducatorType,
               description: adminClass.description || '',
               memberCount: adminClass.member_count || 0,
               accessCountToday: adminClass.access_count_today || 0,
@@ -2604,7 +2793,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             setCurrentClassId(dbAdmin.class_id);
           }
 
-          const derivedUsername = dbAdmin.username || (dbAdmin.email ? dbAdmin.email.split('@')[0] : dbAdmin.name.toLowerCase().replace(/\s+/g, ''));
           const adminObj: User = {
             id: dbAdmin.id,
             name: dbAdmin.name,
@@ -2612,11 +2800,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             email: dbAdmin.email,
             password: finalPassword,
             role: 'admin',
+            educatorType: resolvedEducatorType,
             classId: managedClass?.id || dbAdmin.class_id,
             className: managedClass?.name || dbAdmin.class_name,
             status: (dbAdmin.status || 'active') as 'active' | 'suspended',
             createdAt: dbAdmin.created_at || new Date().toISOString(),
           };
+
+          try {
+            localStorage.setItem('rt_confirmed_educator_' + dbAdmin.id, resolvedEducatorType);
+            localStorage.setItem('rt_confirmed_educator_' + derivedUsername, resolvedEducatorType);
+            if (managedClass?.id) {
+              localStorage.setItem('rt_confirmed_educator_' + managedClass.id, resolvedEducatorType);
+            }
+          } catch {}
 
           setCurrentUser(adminObj);
           setUsers((prev) => [adminObj, ...prev.filter((u) => u.id !== adminObj.id)]);
@@ -2690,6 +2887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           setActiveTab('kelas');
           try { localStorage.setItem('rt_admin_active_tab', 'kelas'); } catch {}
+          addActivityLog(adminObj.name, 'admin', 'Login Admin Kelas', `Admin "${adminObj.name}" login untuk mengelola kelas.`, 'auth');
           triggerFirstLoginWelcome(adminObj, managedClass);
           showToast(`Login berhasil sebagai Admin ${adminObj.name}!`, 'success');
           playNotificationSound('chime');
@@ -2738,10 +2936,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         showToast('Password admin salah. Silakan periksa kembali.', 'warn');
         return { success: false, message: 'Password admin salah. Silakan periksa kembali.' };
       }
+      const fallbackEducatorType: EducatorType =
+        (foundAdmin.educatorType as EducatorType) ||
+        (localStorage.getItem('rt_confirmed_educator_' + foundAdmin.id) as EducatorType) ||
+        (foundAdmin.username ? (localStorage.getItem('rt_confirmed_educator_' + foundAdmin.username.toLowerCase()) as EducatorType) : null) ||
+        (classes.find((c) => c.id === foundAdmin.classId)?.educatorType as EducatorType) ||
+        'dosen';
+
       const adminFinalObj: User = {
         ...foundAdmin,
+        educatorType: fallbackEducatorType,
         role: 'admin',
       };
+      try {
+        localStorage.setItem('rt_confirmed_educator_' + adminFinalObj.id, fallbackEducatorType);
+        if (adminFinalObj.username) {
+          localStorage.setItem('rt_confirmed_educator_' + adminFinalObj.username.toLowerCase(), fallbackEducatorType);
+        }
+      } catch {}
       setCurrentUser(adminFinalObj);
       if (adminFinalObj.classId) setCurrentClassId(adminFinalObj.classId);
       setActiveTab('kelas');
@@ -2839,10 +3051,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
+    // Check if class admin is suspended
+    const classAdmin = users.find((u) => u.role === 'admin' && (u.id === targetClass!.adminId || u.classId === targetClass!.id));
+    if (classAdmin && classAdmin.status === 'suspended') {
+      showToast('Akses kelas ini ditangguhkan karena akun admin sedang dinonaktifkan oleh Owner.', 'warn');
+      return {
+        success: false,
+        message: 'Akses kelas ini ditangguhkan karena akun admin sedang dinonaktifkan oleh Owner.',
+      };
+    }
+
     const cleanName = (memberName || 'Member Siswa').trim();
     const cleanEmail = (memberEmail && memberEmail.includes('@'))
       ? memberEmail.trim().toLowerCase()
       : `${cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')}@siswa.remindtask.com`;
+
+    // Check if student user is suspended
+    const existingStudent = users.find(
+      (u) =>
+        u.role === 'member' &&
+        ((u.email && u.email.toLowerCase() === cleanEmail.toLowerCase()) ||
+          (u.name.toLowerCase() === cleanName.toLowerCase() && u.classId === targetClass!.id))
+    );
+    if (existingStudent && existingStudent.status === 'suspended') {
+      showToast('Akun Anda sedang ditangguhkan oleh Owner Platform.', 'warn');
+      return {
+        success: false,
+        message: 'Akun Anda sedang ditangguhkan oleh Owner Platform.',
+      };
+    }
 
     const memberId = 'member-' + Math.random().toString(36).substring(2, 8);
     const newMember: User = {
@@ -3051,6 +3288,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setNotifications(mappedNotifs);
         localStorage.setItem(STORAGE_KEYS.NOTIFS, JSON.stringify(mappedNotifs));
       }
+
+      // Also fetch schedules for this class so member with class code can immediately see class schedules
+      try {
+        const schedRes = await client
+          .from('schedules')
+          .select('*')
+          .or(`class_id.eq.${targetClass.id},class_id.eq.${targetClass.code},class_id.eq.global`)
+          .order('created_at', { ascending: true });
+
+        let schedData = schedRes.data;
+        if (!Array.isArray(schedData) || schedData.length === 0) {
+          const allSched = await client.from('schedules').select('*').order('created_at', { ascending: true });
+          if (Array.isArray(allSched.data)) {
+            schedData = allSched.data;
+          }
+        }
+
+        if (Array.isArray(schedData)) {
+          const mappedSched: ScheduleItem[] = schedData.map((s: any) => ({
+            id: s.id,
+            classId: s.class_id,
+            day: s.day,
+            subject: s.subject,
+            startTime: s.start_time,
+            endTime: s.end_time,
+            teacherName: s.teacher_name || '',
+            room: s.room_or_link || s.room || '',
+            notes: s.notes || '',
+            color: s.color_badge || s.color || '',
+            createdAt: s.created_at,
+          }));
+          setSchedules((prev) => {
+            const map = new Map<string, ScheduleItem>();
+            mappedSched.forEach((item) => map.set(item.id, item));
+            prev.forEach((item) => {
+              if (!map.has(item.id)) map.set(item.id, item);
+            });
+            const merged = Array.from(map.values());
+            try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      } catch (errSched) {
+        console.warn('Fetch schedules in enterClassByCode warning:', errSched);
+      }
     }
 
     setClasses((prev) =>
@@ -3160,6 +3442,103 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const deleteClassChatMessage = async (messageId: string): Promise<void> => {
+    setClassChats((prev) => prev.filter((c) => c.id !== messageId));
+    setOwnerChats((prev) => prev.filter((c) => c.id !== messageId));
+
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.CLASS_CHATS);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          localStorage.setItem(
+            STORAGE_KEYS.CLASS_CHATS,
+            JSON.stringify(parsed.filter((c: any) => c.id !== messageId))
+          );
+        }
+      }
+    } catch {}
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('class_chats').delete().eq('id', messageId);
+      } catch (err) {
+        console.warn('Supabase delete class_chats error:', err);
+      }
+      try {
+        await client.from('owner_chats').delete().eq('id', messageId);
+      } catch {}
+    }
+
+    showToast('Pesan berhasil dihapus.', 'info');
+  };
+
+  const clearChatThread = async (targetUserId: string): Promise<void> => {
+    const isOwnerTarget = targetUserId === 'owner' || targetUserId.startsWith('owner');
+    setClassChats((prev) =>
+      prev.filter((c) => {
+        const isMatch = isOwnerTarget
+          ? c.senderId === 'owner' || c.senderId.startsWith('owner') || c.recipientId === 'owner' || c.recipientId.startsWith('owner') || c.senderRole === 'owner'
+          : (c.senderId === targetUserId && (c.recipientId === currentUser?.id || currentUser?.role === 'owner')) ||
+            (c.recipientId === targetUserId && (c.senderId === currentUser?.id || currentUser?.role === 'owner'));
+        return !isMatch;
+      })
+    );
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        if (isOwnerTarget) {
+          await client.from('class_chats').delete().or('sender_role.eq.owner,recipient_id.eq.owner');
+        } else {
+          await client.from('class_chats').delete().or(`sender_id.eq.${targetUserId},recipient_id.eq.${targetUserId}`);
+        }
+      } catch {}
+    }
+
+    showToast('Riwayat percakapan berhasil dibersihkan.', 'info');
+  };
+
+  // Check if a username is available (not already taken locally or in Supabase)
+  const checkUsernameAvailability = async (username: string): Promise<boolean> => {
+    const clean = username.trim().toLowerCase().replace(/\s+/g, '');
+    if (!clean) return false;
+
+    // Reserved system names
+    if (['ilham', 'owner', 'admin', 'administrator', 'system'].includes(clean)) {
+      return false;
+    }
+
+    // 1. Check local state users
+    const existsLocally = users.some(
+      (u) =>
+        (u.username && u.username.toLowerCase() === clean) ||
+        u.id.toLowerCase() === clean
+    );
+    if (existsLocally) return false;
+
+    // 2. Check Supabase profiles table
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const { data, error } = await client
+          .from('profiles')
+          .select('id, username')
+          .or(`username.ilike.${clean},id.ilike.${clean}`)
+          .limit(1);
+
+        if (!error && Array.isArray(data) && data.length > 0) {
+          return false;
+        }
+      } catch (err) {
+        console.warn('Supabase username check warning:', err);
+      }
+    }
+
+    return true;
+  };
+
   // Add new Admin & Class: Pushes directly to Supabase server
   const addAdminUser = async (data: {
     name: string;
@@ -3168,13 +3547,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     password?: string;
     className: string;
     classCode?: string;
+    educatorType?: EducatorType;
   }): Promise<{ user: User; classItem: ClassItem }> => {
+    const cleanUsername = (data.username || (data.email ? data.email.split('@')[0] : data.name.toLowerCase().replace(/\s+/g, ''))).trim().toLowerCase();
+
+    // STRICT UNIQUE USERNAME CHECK
+    const isAvailable = await checkUsernameAvailability(cleanUsername);
+    if (!isAvailable) {
+      throw new Error(`Username "@${cleanUsername}" sudah digunakan atau tidak tersedia. Silakan gunakan username lain.`);
+    }
+
     const adminId = 'admin-' + Date.now();
     const classId = 'class-' + Date.now();
     const code = (data.classCode?.trim() || Math.random().toString(36).substring(2, 8)).toUpperCase();
     const pwd = data.password?.trim() || 'password123';
-    const cleanUsername = (data.username || (data.email ? data.email.split('@')[0] : data.name.toLowerCase().replace(/\s+/g, ''))).trim().toLowerCase();
     const cleanEmail = (data.email || `${cleanUsername}@admin.remindtask.local`).trim().toLowerCase();
+    const educatorType = data.educatorType || 'dosen';
 
     const newClass: ClassItem = {
       id: classId,
@@ -3182,6 +3570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       name: data.className || `Kelas ${data.name}`,
       adminId,
       adminName: data.name,
+      educatorType,
       description: `Ruang kelas yang dikelola oleh ${data.name}.`,
       memberCount: 0,
       accessCountToday: 0,
@@ -3196,6 +3585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email: cleanEmail,
       password: pwd,
       role: 'admin',
+      educatorType,
       classId,
       className: newClass.name,
       status: 'active',
@@ -3210,7 +3600,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setUsers((prev) => {
       const updated = [newAdmin, ...prev.filter((u) => u.id !== newAdmin.id && (!u.username || u.username !== cleanUsername))];
-      try { localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated)); } catch {}
+      try {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
+        localStorage.setItem('rt_confirmed_educator_' + adminId, educatorType);
+        localStorage.setItem('rt_confirmed_educator_' + cleanUsername, educatorType);
+        localStorage.setItem('rt_confirmed_educator_' + classId, educatorType);
+      } catch {}
       return updated;
     });
 
@@ -3224,6 +3619,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           name: newClass.name,
           admin_id: newClass.adminId,
           admin_name: newClass.adminName,
+          educator_type: educatorType,
           description: newClass.description,
           member_count: 0,
           access_count_today: 0,
@@ -3241,6 +3637,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           email: newAdmin.email,
           password: pwd,
           role: 'admin',
+          educator_type: educatorType,
           class_id: classId,
           class_name: newClass.name,
           status: 'active',
@@ -3255,6 +3652,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             email: newAdmin.email,
             password: pwd,
             role: 'admin',
+            educator_type: educatorType,
             class_id: classId,
             class_name: newClass.name,
             status: 'active',
@@ -3335,25 +3733,91 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { user: newAdmin, classItem: newClass };
   };
 
-  const deleteAdminUser = (userId: string) => {
+  const confirmAdminEducatorType = async (type: EducatorType) => {
+    if (!currentUser) return;
+    const updatedUser: User = { ...currentUser, educatorType: type };
+    setCurrentUser(updatedUser);
+    try {
+      localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(updatedUser));
+      localStorage.setItem('rt_confirmed_educator_' + currentUser.id, type);
+    } catch {}
+
+    setUsers((prev) => {
+      const updated = prev.map((u) => (u.id === currentUser.id ? { ...u, educatorType: type } : u));
+      try { localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+
+    if (currentUser.classId) {
+      setClasses((prev) => {
+        const updated = prev.map((c) => (c.id === currentUser.classId ? { ...c, educatorType: type } : c));
+        try { localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(updated)); } catch {}
+        return updated;
+      });
+    }
+
+    // Persist to Supabase if connected
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('profiles').update({ educator_type: type }).eq('id', currentUser.id);
+        if (currentUser.classId) {
+          await client.from('classes').update({ educator_type: type }).eq('id', currentUser.classId);
+        }
+      } catch (err) {
+        console.warn('Persist educatorType error:', err);
+      }
+    }
+  };
+
+  const deleteAdminUser = async (userId: string): Promise<void> => {
     const target = users.find((u) => u.id === userId);
-    setUsers((prev) => prev.filter((u) => u.id !== userId));
+    setUsers((prev) => {
+      const updated = prev.filter((u) => u.id !== userId);
+      try {
+        localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
 
     const orphanClasses = classes.filter((c) => c.adminId === userId || (target?.classId && c.id === target.classId));
     const orphanClassIds = orphanClasses.map((c) => c.id);
 
     if (orphanClassIds.length > 0) {
-      setClasses((prev) => prev.filter((c) => !orphanClassIds.includes(c.id)));
-      setTasks((prev) => prev.filter((t) => !orphanClassIds.includes(t.classId)));
-      setSubmissions((prev) => prev.filter((s) => !orphanClassIds.includes(s.classId)));
+      setClasses((prev) => {
+        const updated = prev.filter((c) => !orphanClassIds.includes(c.id));
+        try {
+          localStorage.setItem(STORAGE_KEYS.CLASSES, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      setTasks((prev) => {
+        const updated = prev.filter((t) => !orphanClassIds.includes(t.classId));
+        try {
+          localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      setSubmissions((prev) => {
+        const updated = prev.filter((s) => !orphanClassIds.includes(s.classId));
+        try {
+          localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
     }
 
     const client = getSupabaseClient();
     if (client) {
-      client.from('profiles').delete().eq('id', userId).then(() => {}, () => {});
-      if (orphanClassIds.length > 0) {
-        client.from('classes').delete().in('id', orphanClassIds).then(() => {}, () => {});
-        client.from('tasks').delete().in('id', orphanClassIds).then(() => {}, () => {});
+      try {
+        await client.from('profiles').delete().eq('id', userId);
+        if (orphanClassIds.length > 0) {
+          await client.from('classes').delete().in('id', orphanClassIds);
+          await client.from('tasks').delete().in('id', orphanClassIds);
+        }
+        await syncWithSupabase();
+      } catch (err) {
+        console.warn('Supabase deleteAdminUser error:', err);
       }
     }
 
@@ -3361,7 +3825,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       currentUser?.name || 'Owner',
       'owner',
       'Menghapus User Admin',
-      `Admin "${target?.name || userId}" (${target?.email || ''}) dan kelas terkait telah dihapus.`,
+      `Admin "${target?.name || userId}" (${target?.email || ''}) dan kelas terkait telah dihapus dari sistem.`,
       'admin'
     );
 
@@ -3504,6 +3968,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch {}
 
+    const newAvatar = updates.avatar !== undefined ? updates.avatar : currentUser.avatar;
+    const newName = updates.name !== undefined ? updates.name : currentUser.name;
+
+    // Cascade avatar and name updates to all forum posts and comments
+    if (updates.avatar !== undefined || updates.name !== undefined) {
+      setForumPosts((prevPosts) => {
+        const updatedPosts = prevPosts.map((p) => {
+          let modified = false;
+          let authorAvatar = p.authorAvatar;
+          let authorName = p.authorName;
+
+          if (p.authorId === currentUser.id) {
+            authorAvatar = newAvatar;
+            authorName = newName;
+            modified = true;
+          }
+
+          const updatedComments = (p.comments || []).map((c) => {
+            if (c.authorId === currentUser.id) {
+              modified = true;
+              return { ...c, authorAvatar: newAvatar, authorName: newName };
+            }
+            return c;
+          });
+
+          if (modified) {
+            const updatedPost = { ...p, authorAvatar, authorName, comments: updatedComments };
+            const client = getSupabaseClient();
+            if (client) {
+              client
+                .from('forum_posts')
+                .update({
+                  author_avatar: authorAvatar || null,
+                  author_name: authorName,
+                  comments: updatedComments,
+                })
+                .eq('id', p.id)
+                .then(() => {}, () => {});
+            }
+            return updatedPost;
+          }
+          return p;
+        });
+
+        try {
+          localStorage.setItem(STORAGE_KEYS.FORUM_POSTS, JSON.stringify(updatedPosts));
+        } catch {}
+        return updatedPosts;
+      });
+
+      // Direct bulk database update for author_avatar and author_name in Supabase forum_posts table
+      const client = getSupabaseClient();
+      if (client) {
+        client
+          .from('forum_posts')
+          .update({
+            author_avatar: newAvatar || null,
+            author_name: newName,
+          })
+          .eq('author_id', currentUser.id)
+          .then(({ error }) => {
+            if (error) console.warn('[Supabase Forum Posts Bulk Avatar Update Warning]:', error);
+          }, (err) => {
+            console.warn('[Supabase Forum Posts Network Warning]:', err);
+          });
+      }
+    }
+
     const client = getSupabaseClient();
     if (client) {
       const profileToUpsert: any = {
@@ -3532,6 +4064,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateMemberProfile = (updates: { name?: string; email?: string; avatar?: string }) => {
     updateUserProfile(updates);
+  };
+
+  const updateUserDirect = async (userId: string, updates: Partial<User>): Promise<void> => {
+    setUsers((prev) =>
+      prev.map((u) => {
+        if (u.id === userId) {
+          return { ...u, ...updates };
+        }
+        return u;
+      })
+    );
+
+    if (currentUser?.id === userId) {
+      setCurrentUser((prev) => (prev ? { ...prev, ...updates } : prev));
+    }
+
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.USERS);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          const updated = parsed.map((u: User) => (u.id === userId ? { ...u, ...updates } : u));
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
+        }
+      }
+    } catch {}
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        const supabaseUpdates: any = {};
+        if (updates.name !== undefined) supabaseUpdates.name = updates.name;
+        if (updates.password !== undefined) supabaseUpdates.password = updates.password;
+        if (updates.email !== undefined) supabaseUpdates.email = updates.email;
+        if (updates.className !== undefined) supabaseUpdates.class_name = updates.className;
+        if (updates.classId !== undefined) supabaseUpdates.class_id = updates.classId;
+        if (updates.status !== undefined) supabaseUpdates.status = updates.status;
+        if (updates.educatorType !== undefined) supabaseUpdates.educator_type = updates.educatorType;
+
+        if (Object.keys(supabaseUpdates).length > 0) {
+          await client.from('profiles').update(supabaseUpdates).eq('id', userId);
+        }
+      } catch (err) {
+        console.warn('Supabase update user direct error:', err);
+      }
+    }
   };
 
   const createClass = async (name: string, adminName: string): Promise<ClassItem> => {
@@ -3912,25 +4490,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: 'sched-' + Date.now(),
       createdAt: new Date().toISOString(),
     };
-    setSchedules((prev) => [newSchedule, ...prev]);
+    setSchedules((prev) => {
+      const updated = [newSchedule, ...prev];
+      try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
 
     const client = getSupabaseClient();
     if (client) {
-      client
-        .from('schedules')
-        .insert({
+      try {
+        const payload: Record<string, any> = {
           id: newSchedule.id,
           class_id: newSchedule.classId,
           subject: newSchedule.subject,
           day: newSchedule.day,
           start_time: newSchedule.startTime,
           end_time: newSchedule.endTime,
-          room: newSchedule.room || '',
           teacher_name: newSchedule.teacherName || '',
-          color: newSchedule.color || '',
+          room_or_link: newSchedule.room || '',
           notes: newSchedule.notes || '',
-        })
-        .then(() => {}, () => {});
+          color_badge: newSchedule.color || '',
+        };
+        const { error } = await client.from('schedules').insert(payload);
+        if (error) {
+          console.warn('[SUPABASE INSERT SCHEDULE ERROR]:', error.message);
+          // If error is related to schema column names, retry with fallback columns
+          if (error.message.includes('column') || error.message.includes('schema cache')) {
+            await client.from('schedules').insert({
+              id: newSchedule.id,
+              class_id: newSchedule.classId,
+              subject: newSchedule.subject,
+              day: newSchedule.day,
+              start_time: newSchedule.startTime,
+              end_time: newSchedule.endTime,
+              teacher_name: newSchedule.teacherName || '',
+              room: newSchedule.room || '',
+              notes: newSchedule.notes || '',
+              color: newSchedule.color || '',
+            });
+          }
+        }
+      } catch (insertErr) {
+        console.warn('[SUPABASE SCHEDULE INSERT FAILED]:', insertErr);
+      }
     }
 
     addActivityLog(
@@ -3945,7 +4547,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateSchedule = (scheduleId: string, updates: Partial<ScheduleItem>) => {
-    setSchedules((prev) => prev.map((s) => (s.id === scheduleId ? { ...s, ...updates } : s)));
+    setSchedules((prev) => {
+      const updated = prev.map((s) => (s.id === scheduleId ? { ...s, ...updates } : s));
+      try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
 
     const client = getSupabaseClient();
     if (client) {
@@ -3954,12 +4560,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (updates.day !== undefined) dbUpdates.day = updates.day;
       if (updates.startTime !== undefined) dbUpdates.start_time = updates.startTime;
       if (updates.endTime !== undefined) dbUpdates.end_time = updates.endTime;
-      if (updates.room !== undefined) dbUpdates.room = updates.room;
       if (updates.teacherName !== undefined) dbUpdates.teacher_name = updates.teacherName;
       if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
-      if (updates.color !== undefined) dbUpdates.color = updates.color;
+      if (updates.room !== undefined) dbUpdates.room_or_link = updates.room;
+      if (updates.color !== undefined) dbUpdates.color_badge = updates.color;
 
-      client.from('schedules').update(dbUpdates).eq('id', scheduleId).then(() => {}, () => {});
+      client
+        .from('schedules')
+        .update(dbUpdates)
+        .eq('id', scheduleId)
+        .then(
+          async ({ error }) => {
+            if (error && (error.message.includes('column') || error.message.includes('schema cache'))) {
+              const fallbackUpdates: Record<string, any> = { ...dbUpdates };
+              delete fallbackUpdates.room_or_link;
+              delete fallbackUpdates.color_badge;
+              if (updates.room !== undefined) fallbackUpdates.room = updates.room;
+              if (updates.color !== undefined) fallbackUpdates.color = updates.color;
+              await client.from('schedules').update(fallbackUpdates).eq('id', scheduleId);
+            }
+          },
+          () => {}
+        );
     }
 
     addActivityLog(
@@ -3973,7 +4595,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteSchedule = (scheduleId: string) => {
     const target = schedules.find((s) => s.id === scheduleId);
-    setSchedules((prev) => prev.filter((s) => s.id !== scheduleId));
+    setSchedules((prev) => {
+      const updated = prev.filter((s) => s.id !== scheduleId);
+      try { localStorage.setItem('remindtask_global_v5_schedules', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
 
     const client = getSupabaseClient();
     if (client) {
@@ -4393,7 +5019,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     note?: string,
     verificationToken?: string,
     coords?: { lat: number; lng: number },
-    overrideStudent?: { id: string; name: string; email?: string }
+    overrideStudent?: { id: string; name: string; email?: string },
+    proofFileUrl?: string,
+    proofFileName?: string
   ): Promise<{ success: boolean; message: string }> => {
     const session = attendanceSessions.find((s) => s.id === sessionId);
     if (!session) {
@@ -4427,21 +5055,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // ANTI-SABOTASE 3: Geofence Validation (jika diaktifkan oleh admin)
+    // ANTI-SABOTASE 3: Geofence Validation (Strict GPS Location Check)
     let locationVerified = false;
-    if (session.requireLocation && session.latitude && session.longitude) {
-      if (!coords) {
+    const hasSessionCoords = session.latitude !== undefined && session.longitude !== undefined && session.latitude !== 0 && session.longitude !== 0;
+    if (status === 'hadir' && (session.requireLocation || hasSessionCoords)) {
+      if (!coords || isNaN(coords.lat) || isNaN(coords.lng) || (coords.lat === 0 && coords.lng === 0)) {
         return {
           success: false,
-          message: 'Sesi ini mewajibkan verifikasi lokasi GPS kelas. Harap izinkan akses lokasi di perangkat Anda.',
+          message: 'Presensi ditolak! Sesi ini mewajibkan verifikasi lokasi GPS. Harap aktifkan dan izinkan akses GPS lokasi Anda.',
         };
       }
-      const dist = calculateDistanceMeters(coords.lat, coords.lng, session.latitude, session.longitude);
+      const dist = calculateDistanceMeters(coords.lat, coords.lng, session.latitude!, session.longitude!);
       const maxRadius = session.radiusMeters || 100;
       if (dist > maxRadius) {
         return {
           success: false,
-          message: `Anda terdeteksi berada di luar area kelas (${dist} meter dari kelas, batas maksimal ${maxRadius} meter). Presensi ditolak!`,
+          message: `Presensi HADIR Ditolak! Terdeteksi berada di luar lokasi kelas (${dist}m dari kelas, batas maksimal radius ${maxRadius}m). Terdeteksi potensi sabotase lokasi!`,
         };
       }
       locationVerified = true;
@@ -4462,6 +5091,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deviceInfo,
       verificationMethod: method,
       note: note || '',
+      proofFileUrl: proofFileUrl || undefined,
+      proofFileName: proofFileName || undefined,
       locationVerified,
       createdAt: new Date().toISOString(),
     };
@@ -4483,6 +5114,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           device_info: newRecord.deviceInfo || null,
           verification_method: newRecord.verificationMethod,
           note: newRecord.note || null,
+          proof_file_url: newRecord.proofFileUrl || null,
+          proof_file_name: newRecord.proofFileName || null,
           location_verified: newRecord.locationVerified,
           created_at: newRecord.createdAt,
         });
@@ -4539,7 +5172,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     proofFileName?: string;
     proofFileUrl?: string;
     note?: string;
-    manualCode?: string;
+    verificationToken?: string;
   }): Promise<{ success: boolean; message: string }> => {
     const session = attendanceSessions.find((s) => s.id === data.sessionId);
     if (!session) {
@@ -4564,19 +5197,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    // Geofencing verification
+    // Geofencing verification (ANTI-SABOTASE LOKASI GPS)
     let distMeters: number | undefined = undefined;
     let withinRad: boolean | undefined = undefined;
-    if (session.latitude !== undefined && session.longitude !== undefined && data.latitude !== undefined && data.longitude !== undefined) {
+    const hasSessionCoords = session.latitude !== undefined && session.longitude !== undefined && session.latitude !== 0 && session.longitude !== 0;
+
+    if ((data.status === 'hadir' || session.requireLocation) && hasSessionCoords) {
+      if (
+        data.latitude === undefined ||
+        data.longitude === undefined ||
+        isNaN(data.latitude) ||
+        isNaN(data.longitude) ||
+        (data.latitude === 0 && data.longitude === 0)
+      ) {
+        return {
+          success: false,
+          message: 'Presensi HADIR ditolak! Lokasi GPS Anda tidak terdeteksi. Wajib mengaktifkan GPS lokasi perangkat Anda untuk presensi di kelas ini.',
+        };
+      }
+      distMeters = calculateDistanceMeters(session.latitude!, session.longitude!, data.latitude, data.longitude);
+      const maxRadius = session.radiusMeters || 100;
+      withinRad = distMeters <= maxRadius;
+
+      if (!withinRad) {
+        return {
+          success: false,
+          message: `Presensi HADIR Ditolak! Terdeteksi berada di luar lokasi area kelas (${distMeters} meter dari kelas, batas maksimal radius ${maxRadius} meter). Terdeteksi potensi sabotase lokasi!`,
+        };
+      }
+    } else if (session.latitude !== undefined && session.longitude !== undefined && data.latitude !== undefined && data.longitude !== undefined) {
       distMeters = calculateDistanceMeters(session.latitude, session.longitude, data.latitude, data.longitude);
       const maxRadius = session.radiusMeters || 100;
       withinRad = distMeters <= maxRadius;
-      if (data.status === 'hadir' && !withinRad) {
-        return {
-          success: false,
-          message: `Lokasi Anda berada di luar radius kelas (${distMeters} meter, maksimal ${maxRadius} meter).`,
-        };
-      }
     }
 
     const newRecord: AttendanceRecord = {
@@ -4590,7 +5242,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       checkInTime: new Date().toISOString(),
       timestamp: new Date().toISOString(),
       deviceInfo: `${navigator.platform || 'Device'} • ${window.screen.width}x${window.screen.height}`,
-      verificationMethod: data.manualCode ? 'rolling_token' : data.proofFileUrl ? 'permission_request' : 'qr_scan',
+      verificationMethod: data.proofFileUrl ? 'permission_request' : 'qr_scan',
       note: data.note,
       proofFileName: data.proofFileName,
       proofFileUrl: data.proofFileUrl,
@@ -4703,6 +5355,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const newLikes = newLikedBy.length;
           const updated = { ...post, likedBy: newLikedBy, likes: newLikes };
 
+          if (!isLiked && post.authorId && post.authorId !== currentUser.id) {
+            sendCustomNotification(
+              '❤️ Suka Baru di Forum',
+              `${currentUser.name} menyukai postingan Anda: "${post.title}"`,
+              'system',
+              post.classId,
+              undefined,
+              undefined,
+              post.authorId
+            );
+          }
+
           const client = getSupabaseClient();
           if (client) {
             client
@@ -4739,6 +5403,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const updatedComments = [...(post.comments || []), newComment];
           const updated = { ...post, comments: updatedComments };
 
+          if (post.authorId && post.authorId !== currentUser.id) {
+            sendCustomNotification(
+              '💬 Komentar Baru di Forum',
+              `${currentUser.name} mengomentari postingan Anda: "${text.length > 40 ? text.substring(0, 37) + '...' : text}"`,
+              'system',
+              post.classId,
+              undefined,
+              undefined,
+              post.authorId
+            );
+          }
+
           const client = getSupabaseClient();
           if (client) {
             client
@@ -4762,6 +5438,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteForumPost = async (postId: string) => {
+    if (currentRole !== 'owner') {
+      showToast('Hanya Owner Platform yang memiliki wewenang untuk menghapus postingan forum!', 'warn');
+      return;
+    }
+
     setForumPosts((prev) => prev.filter((p) => p.id !== postId));
 
     const client = getSupabaseClient();
@@ -4771,41 +5452,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       } catch (err) {}
     }
 
-    showToast('Postingan forum berhasil dihapus.', 'info');
+    showToast('Postingan forum berhasil dihapus oleh Owner.', 'info');
   };
 
   // Anonymous Wall Actions
   const addAnonymousMessage = async (
     data: Omit<AnonymousMessage, 'id' | 'createdAt' | 'likes' | 'likedByMe'>
   ): Promise<AnonymousMessage> => {
+    const senderId = data.senderId || currentUser?.id || 'anon-' + Date.now();
+    const senderName = data.senderName || currentUser?.name || 'Siswa Kelas';
+    const senderEmail = data.senderEmail || currentUser?.email || undefined;
+    const senderUsername = data.senderUsername || currentUser?.username || undefined;
+    const senderRole = data.senderRole || currentUser?.role || 'member';
+
     const newMsg: AnonymousMessage = {
       ...data,
       id: 'anon-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       likes: 0,
       likedByMe: false,
       createdAt: new Date().toISOString(),
+      senderId,
+      senderName,
+      senderEmail,
+      senderUsername,
+      senderRole,
     };
 
-    setAnonymousMessages((prev) => [newMsg, ...prev]);
+    setAnonymousMessages((prev) => {
+      const updated = [newMsg, ...prev];
+      try {
+        localStorage.setItem('remindtask_global_v5_anon_messages', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
 
     const client = getSupabaseClient();
     if (client) {
+      const senderMeta = {
+        __sender: {
+          id: senderId,
+          name: senderName,
+          email: senderEmail,
+          username: senderUsername,
+          role: senderRole,
+        },
+      };
+
+      const fullPayload = {
+        id: newMsg.id,
+        class_id: newMsg.classId,
+        class_name: newMsg.className,
+        message: newMsg.message,
+        tag: newMsg.tag,
+        alias: newMsg.alias,
+        avatar_emoji: newMsg.avatarEmoji,
+        card_gradient: newMsg.cardGradient,
+        likes: 0,
+        liked_by_users: [senderMeta],
+        replies: [],
+        is_pinned: false,
+        sender_id: senderId,
+        sender_name: senderName,
+        sender_email: senderEmail,
+        sender_username: senderUsername,
+        sender_role: senderRole,
+      };
+
       client
         .from('anonymous_wall')
-        .insert({
-          id: newMsg.id,
-          class_id: newMsg.classId,
-          class_name: newMsg.className,
-          message: newMsg.message,
-          tag: newMsg.tag,
-          alias: newMsg.alias,
-          avatar_emoji: newMsg.avatarEmoji,
-          card_gradient: newMsg.cardGradient,
-          likes: 0,
-          replies: [],
-          is_pinned: false,
-        })
-        .then(() => {}, () => {});
+        .insert(fullPayload)
+        .then(
+          (res: any) => {
+            if (res && res.error) {
+              const fallbackPayload = {
+                id: newMsg.id,
+                class_id: newMsg.classId,
+                class_name: newMsg.className,
+                message: newMsg.message,
+                tag: newMsg.tag,
+                alias: newMsg.alias,
+                avatar_emoji: newMsg.avatarEmoji,
+                card_gradient: newMsg.cardGradient,
+                likes: 0,
+                liked_by_users: [senderMeta],
+                replies: [],
+                is_pinned: false,
+              };
+              client.from('anonymous_wall').insert(fallbackPayload).then(() => {}, () => {});
+            }
+          },
+          () => {}
+        );
     }
 
     addActivityLog(
@@ -4861,6 +5598,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return msg;
         })
       );
+
+      // Send instant notification on new like
+      if (!isAlreadyLiked) {
+        const targetMsg = anonymousMessages.find((m) => m.id === messageId);
+        const snippet = (targetMsg?.message || '').slice(0, 45);
+        sendCustomNotification(
+          '❤️ Like Baru di Pesan Anonim',
+          `Seseorang menyukai pesan anonim: "${snippet}${snippet.length >= 45 ? '...' : ''}"`,
+          'system',
+          targetMsg?.classId,
+          undefined,
+          'all'
+        );
+        sendBrowserPushNotification(
+          '❤️ Like Baru di Pesan Anonim',
+          `Seseorang menyukai pesan anonim: "${snippet}"`
+        );
+      }
     } catch (err) {
       console.warn('Like error:', err);
     }
@@ -4877,7 +5632,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addReplyToAnonymousMessage = (
     messageId: string,
     replyText: string,
-    options?: { authorName?: string; authorEmoji?: string; authorRole?: 'member' | 'admin' | 'owner' }
+    options?: {
+      authorName?: string;
+      authorEmoji?: string;
+      authorRole?: 'member' | 'admin' | 'owner';
+      senderId?: string;
+      realSenderName?: string;
+      senderEmail?: string;
+    }
   ) => {
     const text = replyText.trim();
     if (!text) return;
@@ -4891,14 +5653,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       options?.authorEmoji ||
       (role === 'owner' ? '👑' : role === 'admin' ? '🛡️' : '💬');
 
-    const newReply = {
+    const newReply: AnonymousReply = {
       id: 'reply-' + Date.now() + '-' + Math.random().toString(36).substring(2, 5),
       authorName,
       authorEmoji,
       authorRole: role,
       message: text,
       createdAt: nowIso,
+      senderId: options?.senderId || currentUser?.id,
+      realSenderName: options?.realSenderName || currentUser?.name || authorName,
+      senderEmail: options?.senderEmail || currentUser?.email,
+      senderRole: role,
     };
+
+    const targetMsg = anonymousMessages.find((m) => m.id === messageId);
 
     setAnonymousMessages((prev) =>
       prev.map((msg) => {
@@ -4927,6 +5695,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         return msg;
       })
+    );
+
+    // Send instant notification and browser push for anonymous wall reply
+    const msgSnippet = (targetMsg?.message || '').slice(0, 35);
+    sendCustomNotification(
+      '💬 Komentar Baru di Pesan Anonim',
+      `${authorName} menanggapi pesan "${msgSnippet}...": "${text.slice(0, 45)}"`,
+      'chat',
+      targetMsg?.classId,
+      undefined,
+      'all'
+    );
+    sendBrowserPushNotification(
+      '💬 Komentar Baru di Pesan Anonim',
+      `${authorName}: "${text.slice(0, 50)}"`
     );
 
     addActivityLog(
@@ -5217,6 +6000,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (isTargetedToCurrentSession()) {
       setLiveBannerNotification(newNotif);
       playNotificationSoundOnce(newNotif.id, 'chime');
+      sendBrowserPushNotification(title, message, newNotif.id);
     }
 
     const client = getSupabaseClient();
@@ -5457,18 +6241,102 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Broadcast pengumuman berhasil disiarkan!', 'success');
   };
 
-  // Owner management
-  const toggleUserStatus = (userId: string) => {
-    setUsers((prev) =>
-      prev.map((u) => {
-        if (u.id === userId) {
-          const nextStatus = u.status === 'active' ? 'suspended' : 'active';
-          return { ...u, status: nextStatus };
+  // Owner management: Suspend / Aktifkan User
+  const toggleUserStatus = async (userId: string) => {
+    let nextStatus: 'active' | 'suspended' = 'suspended';
+    let targetName = 'Pengguna';
+
+    const existingUser = users.find((u) => u.id === userId);
+    if (existingUser) {
+      nextStatus = existingUser.status === 'active' ? 'suspended' : 'active';
+      targetName = existingUser.name;
+      setUsers((prev) =>
+        prev.map((u) => {
+          if (u.id === userId) {
+            return { ...u, status: nextStatus };
+          }
+          return u;
+        })
+      );
+    } else {
+      // If user came from class access logs and isn't in users state yet
+      const foundInLogs = classAccessLogs.find((l) => l.studentId === userId);
+      if (foundInLogs) {
+        targetName = foundInLogs.studentName;
+        nextStatus = 'suspended';
+        const newUserObj: User = {
+          id: userId,
+          name: foundInLogs.studentName,
+          email: foundInLogs.studentEmail,
+          role: 'member',
+          classId: foundInLogs.classId,
+          className: foundInLogs.className,
+          status: 'suspended',
+          createdAt: foundInLogs.accessedAt,
+        };
+        setUsers((prev) => [...prev, newUserObj]);
+      }
+    }
+
+    // Save to localStorage
+    try {
+      const stored = localStorage.getItem(STORAGE_KEYS.USERS);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          const exists = parsed.some((u: User) => u.id === userId);
+          const updated = exists
+            ? parsed.map((u: User) => (u.id === userId ? { ...u, status: nextStatus } : u))
+            : [...parsed, { id: userId, name: targetName, role: 'member', status: nextStatus }];
+          localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(updated));
         }
-        return u;
-      })
+      }
+      // Track suspended IDs
+      const suspendedSet: string[] = JSON.parse(localStorage.getItem('rt_suspended_user_ids') || '[]');
+      if (nextStatus === 'suspended') {
+        if (!suspendedSet.includes(userId)) suspendedSet.push(userId);
+      } else {
+        const filtered = suspendedSet.filter((id) => id !== userId);
+        localStorage.setItem('rt_suspended_user_ids', JSON.stringify(filtered));
+      }
+      if (nextStatus === 'suspended') {
+        localStorage.setItem('rt_suspended_user_ids', JSON.stringify(suspendedSet));
+      }
+    } catch {}
+
+    // Persist to Supabase profiles table
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('profiles').update({ status: nextStatus }).eq('id', userId);
+      } catch (err) {
+        console.warn('Supabase toggle status error:', err);
+      }
+    }
+
+    addActivityLog(
+      currentUser?.name || 'Owner',
+      'owner',
+      nextStatus === 'suspended' ? 'Tangguhkan Pengguna' : 'Aktifkan Pengguna',
+      `Owner mengubah status akun ${targetName} menjadi ${
+        nextStatus === 'suspended' ? 'Ditangguhkan (Suspended)' : 'Aktif'
+      }`,
+      'auth'
     );
-    showToast('Status pengguna berhasil diperbarui.', 'info');
+
+    // If currently logged-in user got suspended, logout immediately
+    if (currentUser?.id === userId && nextStatus === 'suspended') {
+      logout();
+      showToast('Akun Anda telah ditangguhkan oleh Owner Platform.', 'warn');
+      return;
+    }
+
+    showToast(
+      `Status ${targetName} berhasil diubah ke ${
+        nextStatus === 'active' ? 'AKTIF' : 'DITANGGUHKAN'
+      }!`,
+      'success'
+    );
   };
 
   const sendOwnerChatMessage = async (
@@ -5649,6 +6517,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const loginAsStoredAccount = async (account: User): Promise<{ success: boolean; message: string }> => {
+    // Check if account is suspended
+    const matchedUser = users.find((u) => u.id === account.id || (u.email && account.email && u.email.toLowerCase() === account.email.toLowerCase()));
+    if (account.status === 'suspended' || matchedUser?.status === 'suspended') {
+      showToast('Akun ini sedang ditangguhkan oleh Owner Platform.', 'warn');
+      return { success: false, message: 'Akun ini sedang ditangguhkan oleh Owner Platform.' };
+    }
+
     setCurrentUser(account);
     if (account.classId) {
       setCurrentClassId(account.classId);
@@ -5829,15 +6704,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         classAccessLogs,
         classChats,
         sendClassChatMessage,
+        deleteClassChatMessage,
+        clearChatThread,
         markClassChatsAsRead,
         registerAdmin,
         addAdminUser,
+        checkUsernameAvailability,
+        confirmAdminEducatorType,
         deleteAdminUser,
         deleteMemberUser,
         logout,
         switchRoleQuick,
         updateMemberProfile,
         updateUserProfile,
+        updateUserDirect,
         selectClass,
         createClass,
         deleteClass,

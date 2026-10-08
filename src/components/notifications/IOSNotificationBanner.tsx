@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { X, CheckCircle2, ChevronRight, Sparkles, Megaphone, BellRing } from 'lucide-react';
+import { X, CheckCircle2, ChevronRight, Sparkles, Megaphone, BellRing, ExternalLink } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { NotificationItem } from '../../types';
+import { resolveNotificationTarget, executeNotificationNavigation } from '../../utils/notificationTarget';
 
 export const IOSNotificationBanner: React.FC = () => {
   const {
@@ -12,6 +13,7 @@ export const IOSNotificationBanner: React.FC = () => {
     markNotificationAsRead,
     currentRole,
     currentUser,
+    showToast,
   } = useApp();
 
   const [activeNotif, setActiveNotif] = useState<NotificationItem | null>(null);
@@ -84,11 +86,15 @@ export const IOSNotificationBanner: React.FC = () => {
     setLiveBannerNotification(null);
   };
 
-  const handleOpenDrawer = () => {
-    markNotificationAsRead(activeNotif.id);
-    setIsVisible(false);
-    setLiveBannerNotification(null);
-    setIsNotificationDrawerOpen(true);
+  const handleBannerClick = () => {
+    executeNotificationNavigation(activeNotif, currentRole || 'member', {
+      markAsRead: markNotificationAsRead,
+      closeDrawer: () => {
+        setIsVisible(false);
+        setLiveBannerNotification(null);
+      },
+      showToast,
+    });
   };
 
   // Touch Swipe Up Gesture to Dismiss (Native iOS / Android Push Notification Behavior)
@@ -129,7 +135,7 @@ export const IOSNotificationBanner: React.FC = () => {
     >
       {/* iOS Lockscreen Push Notification Card (Responsive for Mobile/Tablet/Desktop/iOS/Android) */}
       <div
-        onClick={handleOpenDrawer}
+        onClick={handleBannerClick}
         className="relative bg-[#1c1c1e]/95 hover:bg-[#26262a]/95 backdrop-blur-2xl border border-white/12 rounded-3xl p-3.5 sm:p-4 shadow-2xl shadow-black/80 transition-all cursor-pointer group active:scale-[0.98] overflow-hidden"
       >
         {/* Top Swipe Bar Indicator for Mobile */}
@@ -183,10 +189,10 @@ export const IOSNotificationBanner: React.FC = () => {
         <div className="mt-2.5 pt-2 border-t border-white/5 flex items-center justify-between text-[9px] sm:text-[10px] text-slate-400">
           <span className="flex items-center gap-1 text-pink-400 font-semibold truncate">
             <Sparkles className="w-3 h-3 shrink-0 text-amber-300" />
-            <span className="truncate">RemindTask • Pusat Pemberitahuan</span>
+            <span className="truncate">Tujuan: {resolveNotificationTarget(activeNotif, currentRole || 'member').label}</span>
           </span>
-          <span className="flex items-center gap-0.5 group-hover:translate-x-0.5 transition-transform text-slate-400 font-medium shrink-0">
-            <span>Buka</span>
+          <span className="flex items-center gap-1 group-hover:translate-x-0.5 transition-transform text-pink-300 font-bold shrink-0">
+            <span>Buka Target</span>
             <ChevronRight className="w-3 h-3" />
           </span>
         </div>

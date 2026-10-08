@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ClassMaterial, MaterialCategory } from '../../types';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 
 interface MaterialFormModalProps {
   isOpen: boolean;
@@ -38,7 +39,10 @@ export const MaterialFormModal: React.FC<MaterialFormModalProps> = ({
   onClose,
   initialMaterial,
 }) => {
-  const { addMaterial, updateMaterial, currentClass, classes } = useApp();
+  const { addMaterial, updateMaterial, currentClass, classes, currentUser } = useApp();
+
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -179,7 +183,7 @@ export const MaterialFormModal: React.FC<MaterialFormModalProps> = ({
               <p className="text-xs text-slate-400">
                 {initialMaterial
                   ? 'Perbarui modul, slide, atau tautan materi kelas'
-                  : 'Bagikan berkas belajar atau tautan materi ke seluruh siswa'}
+                  : `Bagikan berkas belajar atau tautan materi ke seluruh ${terms.memberTitlePlural.toLowerCase()}`}
               </p>
             </div>
           </div>

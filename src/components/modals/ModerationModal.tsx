@@ -30,6 +30,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { Task, TaskSubmission } from '../../types';
 import { formatIndonesianDate } from '../../utils/notification';
 import {
@@ -51,7 +52,9 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
   submission,
   task,
 }) => {
-  const { moderateSubmission, showToast } = useApp();
+  const { moderateSubmission, showToast, currentUser, currentClass } = useApp();
+  const educatorType = resolveEducatorType(currentUser, currentClass);
+  const terms = getTerminology(educatorType);
   const [feedback, setFeedback] = useState(submission?.adminFeedback || '');
   const [isPreviewOpen, setIsPreviewOpen] = useState(true); // Default open to review immediately
   const [imageZoom, setImageZoom] = useState(1);
@@ -142,7 +145,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
   const handleDownload = () => {
     const success = downloadEvidenceFile(fileName, fileUrl, {
       studentName: submission.memberName,
-      taskTitle: task?.title || 'Tugas Siswa',
+      taskTitle: task?.title || ('Tugas ' + terms.memberTitle),
       submittedAt: formatIndonesianDate(submission.submittedAt),
       note: submission.submissionNote,
     });
@@ -238,7 +241,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
                   </span>
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Baca, tinjau, dan unduh berkas bukti pengerjaan siswa
+                  Baca, tinjau, dan unduh berkas bukti pengerjaan {terms.memberTitle.toLowerCase()}
                 </p>
               </div>
             </div>
@@ -604,7 +607,7 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
           {submission.submissionNote && (
             <div className="mt-3 text-xs bg-[#16112d] p-3 rounded-xl border border-[#2b214d] text-slate-300">
               <span className="font-semibold text-slate-400 block text-[10px] mb-0.5 uppercase tracking-wider">
-                Catatan Siswa:
+                Catatan {terms.memberTitle}:
               </span>
               "{submission.submissionNote}"
             </div>
@@ -614,13 +617,13 @@ export const ModerationModal: React.FC<ModerationModalProps> = ({
           <div className="mt-4">
             <label className="block text-xs font-semibold text-slate-300 mb-1.5 flex items-center gap-1.5">
               <MessageSquare className="w-3.5 h-3.5 text-pink-400" />
-              <span>Catatan Evaluasi / Umpan Balik Admin</span>
+              <span>Catatan Evaluasi / Umpan Balik ({terms.educatorTitle})</span>
             </label>
             <textarea
               rows={2}
               value={feedback}
               onChange={(e) => setFeedback(e.target.value)}
-              placeholder="Tuliskan catatan atau umpan balik untuk siswa (cth: Laporan sudah lengkap dan sesuai panduan!)..."
+              placeholder={`Tuliskan catatan atau umpan balik untuk ${terms.memberTitle.toLowerCase()} (cth: Laporan sudah lengkap dan sesuai panduan!)...`}
               className="w-full bg-[#1b1536] border border-[#342958] focus:border-pink-500 rounded-xl px-3.5 py-2 text-white text-xs outline-none transition-colors placeholder:text-slate-500 resize-none"
             />
           </div>
