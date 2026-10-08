@@ -88,9 +88,9 @@ export function verifyAttendanceToken(
   const now = Date.now();
   const currentStep = Math.floor(now / intervalMs);
 
-  // Generate valid codes for current step and neighboring steps (+/- 4 steps, ~60s tolerance for clock drift)
+  // Generate valid codes for current step and neighboring steps (+/- 40 steps, ~10 minutes tolerance for clock drift)
   const validCodes: string[] = [];
-  for (let offset = -4; offset <= 4; offset++) {
+  for (let offset = -40; offset <= 40; offset++) {
     validCodes.push(getCodeForStep(session.id, session.secretToken, currentStep + offset).toUpperCase());
   }
 

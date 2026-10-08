@@ -320,7 +320,7 @@ export interface QuizSubmission {
 }
 
 export type AttendanceStatus = 'hadir' | 'izin' | 'sakit' | 'alpa';
-export type AttendanceVerificationMethod = 'qr_scan' | 'rolling_token' | 'manual_admin' | 'permission_request';
+export type AttendanceVerificationMethod = 'qr_scan' | 'rolling_token' | 'manual_admin' | 'permission_request' | 'photo_proof';
 
 export interface AttendanceSession {
   id: string;

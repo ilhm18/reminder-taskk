@@ -76,15 +76,98 @@ export const AttendanceMemberView: React.FC = () => {
   }, [refreshAttendance]);
 
   // Scanner & Input State
-  const [activeMode, setActiveMode] = useState<'camera' | 'code' | 'permission'>('camera');
-  const [manualCode, setManualCode] = useState('');
-  const [isManualSubmitting, setIsManualSubmitting] = useState(false);
+  const [activeMode, setActiveMode] = useState<'camera' | 'photo' | 'permission'>('camera');
+  const [attendancePhotoUrl, setAttendancePhotoUrl] = useState('');
+  const [attendancePhotoName, setAttendancePhotoName] = useState('');
+  const [isAttendancePhotoSubmitting, setIsAttendancePhotoSubmitting] = useState(false);
   const [isRefreshingSessions, setIsRefreshingSessions] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<AttendanceStatus>('izin');
   const [permissionNote, setPermissionNote] = useState('');
   const [proofImageUrl, setProofImageUrl] = useState('');
   const [proofFileName, setProofFileName] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleCapturePhoto = () => {
+    const video = videoRef.current;
+    if (video && video.readyState >= 2) {
+      const canvas = document.createElement('canvas');
+      const maxDim = 900;
+      let width = video.videoWidth;
+      let height = video.videoHeight;
+      if (width > height) {
+        if (width > maxDim) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        }
+      } else {
+        if (height > maxDim) {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        setAttendancePhotoUrl(dataUrl);
+        setAttendancePhotoName(`selfie_absen_${Date.now()}.jpg`);
+        showToast('Foto swafoto berhasil diambil! ✓', 'success');
+      }
+    } else {
+      showToast('Kamera belum siap. Harap izinkan akses kamera.', 'warn');
+    }
+  };
+
+  const handleAttendancePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      showToast('Foto harus berupa file gambar (JPG, PNG, WebP).', 'warn');
+      return;
+    }
+
+    if (file.size > 8 * 1024 * 1024) {
+      showToast('Ukuran foto melebihi batas 8MB.', 'warn');
+      return;
+    }
+
+    setAttendancePhotoName(file.name);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_SIZE = 900;
+        let width = img.width;
+        let height = img.height;
+        if (width > height) {
+          if (width > MAX_SIZE) {
+            height = Math.round((height * MAX_SIZE) / width);
+            width = MAX_SIZE;
+          }
+        } else {
+          if (height > MAX_SIZE) {
+            width = Math.round((width * MAX_SIZE) / height);
+            height = MAX_SIZE;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          setAttendancePhotoUrl(dataUrl);
+          showToast('Foto presensi berhasil diunggah! ✓', 'success');
+        }
+      };
+      img.src = ev.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleProofImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -289,7 +372,7 @@ export const AttendanceMemberView: React.FC = () => {
 
   // Switch camera on/off when mode changes
   useEffect(() => {
-    if (activeMode === 'camera' && !myRecordForActive) {
+    if ((activeMode === 'camera' || activeMode === 'photo') && !myRecordForActive) {
       startCamera();
     } else {
       stopCamera();
@@ -457,7 +540,7 @@ export const AttendanceMemberView: React.FC = () => {
       'hadir',
       'qr_scan',
       undefined,
-      extractedToken,
+      scannedData,
       coords
     );
 
@@ -475,34 +558,41 @@ export const AttendanceMemberView: React.FC = () => {
     }
   };
 
-  // Handle Manual Code Submission (Rolling token / Session code)
-  const handleManualCodeSubmit = async (e: React.FormEvent) => {
+  // Handle Swafoto/Selfie Photo Submission
+  const handlePhotoAttendanceSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualCode.trim()) {
-      showToast('Masukkan kode presensi terlebih dahulu.', 'warn');
+    if (!attendancePhotoUrl) {
+      showToast('Ambil swafoto atau unggah foto bukti terlebih dahulu.', 'warn');
       return;
     }
     if (!activeSession) {
       showToast('Tidak ada sesi presensi yang aktif saat ini.', 'warn');
       return;
     }
-    setIsManualSubmitting(true);
+
+    setIsAttendancePhotoSubmitting(true);
     let coords: { lat: number; lng: number } | undefined;
     if (activeSession.requireLocation) {
       coords = await getCoordsPromise();
     }
+
     const res = await recordAttendance(
       activeSession.id,
       'hadir',
-      'rolling_token',
-      undefined,
-      manualCode.trim().toUpperCase(),
-      coords
+      'photo_proof',
+      'Presensi Swafoto / Bukti Foto Kehadiran',
+      undefined, // token (not rolling)
+      coords,
+      undefined, // override student
+      attendancePhotoUrl,
+      attendancePhotoName
     );
-    setIsManualSubmitting(false);
+
+    setIsAttendancePhotoSubmitting(false);
     if (res.success) {
-      setManualCode('');
-      showToast('Presensi Anda berhasil dicatat! ✓', 'success');
+      setAttendancePhotoUrl('');
+      setAttendancePhotoName('');
+      showToast('Presensi swafoto berhasil dicatat! ✓', 'success');
     } else {
       showToast(res.message, 'warn');
     }
@@ -639,6 +729,8 @@ export const AttendanceMemberView: React.FC = () => {
                   <span className="text-pink-300 font-bold">
                     {myRecordForActive.verificationMethod === 'qr_scan'
                       ? 'Scan Barcode / QR Code'
+                      : myRecordForActive.verificationMethod === 'photo_proof'
+                      ? 'Swafoto Selfie'
                       : myRecordForActive.verificationMethod === 'permission_request'
                       ? 'Pengajuan Izin'
                       : 'Manual Admin'}
@@ -692,15 +784,18 @@ export const AttendanceMemberView: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveMode('code')}
+                    onClick={() => {
+                      setActiveMode('photo');
+                      setAttendancePhotoUrl('');
+                    }}
                     className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                      activeMode === 'code'
+                      activeMode === 'photo'
                         ? 'bg-purple-600 text-white shadow-sm'
                         : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    <Keyboard className="w-3.5 h-3.5" />
-                    <span>Input Kode / Barcode</span>
+                    <Camera className="w-3.5 h-3.5" />
+                    <span>Absen Swafoto</span>
                   </button>
                   <button
                     type="button"
@@ -978,39 +1073,107 @@ export const AttendanceMemberView: React.FC = () => {
                 </div>
               )}
 
-              {/* MODE 2: INPUT KODE DINAMIS ATAU BARCODE SECARA MANUAL */}
-              {activeMode === 'code' && (
-                <form onSubmit={handleManualCodeSubmit} className="max-w-md mx-auto space-y-4">
+              {/* MODE 2: ABSEN DENGAN SWAFOTO (SELFIE) ATAU UPLOAD FOTO */}
+              {activeMode === 'photo' && (
+                <form onSubmit={handlePhotoAttendanceSubmit} className="max-w-md mx-auto space-y-4">
                   <div className="p-4 rounded-2xl bg-[#140e28] border border-[#2b1f52] space-y-2 text-center">
-                    <Barcode className="w-8 h-8 text-pink-400 mx-auto" />
-                    <h4 className="text-sm font-bold text-white">Masukkan 6 Digit Kode / Angka Barcode</h4>
+                    <Camera className="w-8 h-8 text-pink-400 mx-auto" />
+                    <h4 className="text-sm font-bold text-white">Swafoto (Selfie) untuk Verifikasi Presensi</h4>
                     <p className="text-xs text-slate-400 leading-relaxed">
-                      Ketikkan kode rolling yang tampil di bawah QR proyektor (misal: <strong className="text-pink-300 font-mono">ABC123</strong>) atau kode sesi absensi yang diberikan oleh Guru/Admin.
+                      Sesi presensi mewajibkan verifikasi swafoto langsung dari lokasi kelas untuk menjamin keaslian kehadiran Anda.
                     </p>
                   </div>
 
-                  <div>
-                    <label className="text-xs font-bold text-slate-300 block mb-1.5">
-                      Kode Sesi Presensi / Token Barcode:
+                  {/* Camera Viewport or Preview */}
+                  <div className="relative w-full aspect-square rounded-3xl bg-[#090717] border border-[#291e4f] overflow-hidden flex items-center justify-center">
+                    {attendancePhotoUrl ? (
+                      <div className="absolute inset-0">
+                        <img src={attendancePhotoUrl} alt="Preview Selfie" className="w-full h-full object-cover" />
+                        <button
+                          type="button"
+                          onClick={() => setAttendancePhotoUrl('')}
+                          className="absolute top-4 right-4 p-2.5 rounded-2xl bg-black/70 hover:bg-black text-white hover:text-red-400 transition-all cursor-pointer border border-white/10"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center space-y-4">
+                        <video
+                          ref={videoRef}
+                          playsInline
+                          muted
+                          autoPlay
+                          className="absolute inset-0 w-full h-full object-cover"
+                        />
+                        
+                        {/* Shutter button / guide overlay if camera is active */}
+                        {isCameraActive && !cameraError && (
+                          <div className="absolute inset-x-0 bottom-6 flex flex-col items-center justify-center p-2 z-10">
+                            <button
+                              type="button"
+                              onClick={handleCapturePhoto}
+                              className="w-16 h-16 rounded-full bg-white hover:bg-slate-200 border-4 border-pink-500/80 shadow-2xl flex items-center justify-center cursor-pointer transition-all active:scale-90"
+                              title="Ambil Foto"
+                            >
+                              <div className="w-6 h-6 rounded-full bg-pink-500" />
+                            </button>
+                            <span className="text-[10px] text-white font-extrabold mt-2 drop-shadow-[0_2_4px_rgba(0,0,0,0.8)]">
+                              Klik Swafoto Sekarang
+                            </span>
+                          </div>
+                        )}
+
+                        {cameraError && (
+                          <div className="absolute inset-0 bg-black/90 p-6 flex flex-col items-center justify-center space-y-3 z-10">
+                            <VideoOff className="w-10 h-10 text-red-400" />
+                            <p className="text-xs text-slate-300 max-w-xs leading-relaxed">{cameraError}</p>
+                            <button
+                              type="button"
+                              onClick={() => startCamera(facingMode)}
+                              className="px-4 py-2 rounded-xl bg-pink-500 hover:bg-pink-600 text-white font-bold text-xs cursor-pointer shadow-md flex items-center gap-2 transition-all active:scale-95"
+                            >
+                              <RotateCw className="w-3.5 h-3.5" />
+                              <span>Aktifkan Kamera</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions Bar inside Swafoto */}
+                  <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+                    <label className="flex-1 min-w-[140px] px-4 py-3 rounded-2xl bg-[#191238] hover:bg-[#251b4f] text-pink-300 hover:text-white text-xs font-bold border border-[#342461] shadow-md cursor-pointer flex items-center justify-center gap-2 transition-all active:scale-95">
+                      <ImageIcon className="w-4 h-4 text-pink-400" />
+                      <span>{attendancePhotoUrl ? 'Ganti / Unggah Foto' : 'Unggah dari Galeri'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleAttendancePhotoUpload}
+                        className="hidden"
+                      />
                     </label>
-                    <input
-                      type="text"
-                      required
-                      value={manualCode}
-                      onChange={(e) => setManualCode(e.target.value.toUpperCase())}
-                      placeholder="Contoh: W6E7Z2 atau ASESS-..."
-                      maxLength={32}
-                      className="w-full p-3.5 rounded-2xl bg-[#120e26] border border-[#291e4f] text-base font-mono font-black text-center tracking-widest text-pink-300 placeholder:text-slate-600 focus:outline-none focus:border-pink-500 uppercase"
-                    />
+
+                    {attendancePhotoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setAttendancePhotoUrl('')}
+                        className="px-4 py-3 rounded-2xl bg-slate-100 hover:bg-slate-200 dark:bg-[#120e26] dark:hover:bg-[#1a1435] text-slate-700 dark:text-slate-300 text-xs font-bold border border-slate-200 dark:border-[#291e4f] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <RotateCw className="w-3.5 h-3.5" />
+                        <span>Foto Ulang</span>
+                      </button>
+                    )}
                   </div>
 
                   <button
                     type="submit"
-                    disabled={isManualSubmitting || !manualCode.trim()}
+                    disabled={isAttendancePhotoSubmitting || !attendancePhotoUrl}
                     className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 text-white font-extrabold text-xs shadow-lg shadow-pink-500/25 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 transition-all active:scale-95"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>{isManualSubmitting ? 'Memverifikasi...' : 'Verifikasi & Catat Hadir Sekarang'}</span>
+                    <span>{isAttendancePhotoSubmitting ? 'Mengirim Presensi...' : 'Kirim Foto & Catat Hadir Sekarang'}</span>
                   </button>
                 </form>
               )}

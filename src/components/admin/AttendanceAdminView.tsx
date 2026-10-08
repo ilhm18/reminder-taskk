@@ -369,6 +369,8 @@ export const AttendanceAdminView: React.FC = () => {
       const methodText = rec
         ? rec.verificationMethod === 'qr_scan'
           ? 'Scan Kode QR'
+          : rec.verificationMethod === 'photo_proof'
+          ? 'Swafoto Selfie'
           : rec.verificationMethod === 'permission_request'
           ? 'Pengajuan Izin/Sakit'
           : 'Manual ' + terms.educatorTitle
@@ -458,6 +460,8 @@ export const AttendanceAdminView: React.FC = () => {
         const methodText = rec
           ? rec.verificationMethod === 'qr_scan'
             ? 'Scan Kode QR'
+            : rec.verificationMethod === 'photo_proof'
+            ? 'Swafoto Selfie'
             : rec.verificationMethod === 'permission_request'
             ? 'Pengajuan Izin'
             : 'Manual ' + terms.educatorTitle
@@ -1282,6 +1286,8 @@ export const AttendanceAdminView: React.FC = () => {
                                     <span className="font-mono text-[10px] px-2 py-0.5 rounded bg-purple-500/15 text-purple-300 border border-purple-500/30">
                                       {rec.verificationMethod === 'qr_scan'
                                         ? 'Scan Kode QR'
+                                        : rec.verificationMethod === 'photo_proof'
+                                        ? 'Bukti Swafoto'
                                         : rec.verificationMethod === 'permission_request'
                                         ? 'Pengajuan Izin'
                                         : `Manual ${terms.educatorTitle}`}
