@@ -390,8 +390,15 @@ CREATE TABLE IF NOT EXISTS public.system_settings (
   ai_maintenance_title TEXT DEFAULT 'AI Assistant Sedang Bersiap!',
   ai_maintenance_message TEXT DEFAULT 'Fitur AI Assistant sedang dalam tahap pengembangan developer, mohon ditunggu ya! Kami sedang mematangkan asisten bimbingan belajar cerdas terbaik untuk Anda.',
   ai_progress_percent INT DEFAULT 85,
+  admin_feature_maintenance JSONB DEFAULT '{}'::jsonb,
+  member_feature_maintenance JSONB DEFAULT '{}'::jsonb,
+  feature_maintenance_custom_messages JSONB DEFAULT '{}'::jsonb,
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+ALTER TABLE IF EXISTS public.system_settings ADD COLUMN IF NOT EXISTS admin_feature_maintenance JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE IF EXISTS public.system_settings ADD COLUMN IF NOT EXISTS member_feature_maintenance JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE IF EXISTS public.system_settings ADD COLUMN IF NOT EXISTS feature_maintenance_custom_messages JSONB DEFAULT '{}'::jsonb;
 
 -- 11. Buat Tabel Chat Langsung Admin & Siswa Kelas (Class Member Chats)
 CREATE TABLE IF NOT EXISTS public.class_chats (

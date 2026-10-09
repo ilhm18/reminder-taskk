@@ -85,6 +85,8 @@ import { getSupabaseClient } from '../../services/supabase';
 import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 import { AdminEducatorTypeModal } from '../modals/AdminEducatorTypeModal';
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
+import { FeatureMaintenanceView } from '../maintenance/FeatureMaintenanceView';
+import { getAdminFeatureConfig, ADMIN_FEATURE_MENUS } from '../../constants/featureMenus';
 
 export const AdminPanel: React.FC = () => {
   const {
@@ -112,6 +114,7 @@ export const AdminPanel: React.FC = () => {
     questionBanks,
     moderateSubmission,
     forumPosts,
+    systemSettings,
   } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
@@ -277,6 +280,23 @@ export const AdminPanel: React.FC = () => {
   };
 
   const [activeTab, setActiveTab] = useState<AdminTab>(getAdminTabFromUrl);
+
+  const isCurrentTabMaintenance = useMemo(() => {
+    if (currentUser?.role === 'owner') return false;
+    return Boolean(systemSettings?.adminFeatureMaintenance?.[activeTab]);
+  }, [systemSettings?.adminFeatureMaintenance, activeTab, currentUser]);
+
+  const handleBackFromMaintenance = () => {
+    // If dashboard is also under maintenance, redirect to first available non-maintenance feature
+    if (systemSettings?.adminFeatureMaintenance?.['dashboard']) {
+      const available = ADMIN_FEATURE_MENUS.find((f) => !systemSettings?.adminFeatureMaintenance?.[f.id]);
+      if (available) {
+        setActiveTab(available.id as AdminTab);
+        return;
+      }
+    }
+    setActiveTab('dashboard');
+  };
 
   // Track unread/new forum posts
   const [lastViewedForumTime, setLastViewedForumTime] = useState<number>(() => {
@@ -711,11 +731,18 @@ export const AdminPanel: React.FC = () => {
                               <Icon className={`w-4 h-4 transition-colors ${isActive ? 'text-pink-300' : item.iconColor || 'text-slate-400'}`} />
                               <span>{item.label}</span>
                             </div>
-                            {item.badge && item.badge > 0 ? (
-                              <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
-                                {item.badge}
-                              </span>
-                            ) : null}
+                            <div className="flex items-center gap-1.5">
+                              {systemSettings?.adminFeatureMaintenance?.[item.id] && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-300 font-mono text-[9px] font-bold">
+                                  Maint
+                                </span>
+                              )}
+                              {item.badge && item.badge > 0 ? (
+                                <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                                  {item.badge}
+                                </span>
+                              ) : null}
+                            </div>
                           </button>
                         );
                       })}
@@ -816,11 +843,18 @@ export const AdminPanel: React.FC = () => {
                           <Icon className={`w-4 h-4 transition-colors ${isActive ? 'text-pink-300' : item.iconColor || 'text-slate-400'}`} />
                           <span>{item.label}</span>
                         </div>
-                        {item.badge && item.badge > 0 ? (
-                          <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
-                            {item.badge}
-                          </span>
-                        ) : null}
+                        <div className="flex items-center gap-1.5">
+                          {systemSettings?.adminFeatureMaintenance?.[item.id] && (
+                            <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-300 font-mono text-[9px] font-bold">
+                              Maint
+                            </span>
+                          )}
+                          {item.badge && item.badge > 0 ? (
+                            <span className="w-5 h-5 rounded-full bg-pink-500 text-white font-mono text-[10px] font-bold flex items-center justify-center">
+                              {item.badge}
+                            </span>
+                          ) : null}
+                        </div>
                       </button>
                     );
                   })}
@@ -950,7 +984,18 @@ export const AdminPanel: React.FC = () => {
 
         {/* Content */}
         <div className="p-6 space-y-6 flex-1">
-          {/* TAB 1: KELAS */}
+          {isCurrentTabMaintenance ? (
+            <FeatureMaintenanceView
+              featureName={getAdminFeatureConfig(activeTab)?.name || activeTab}
+              categoryLabel={getAdminFeatureConfig(activeTab)?.categoryLabel || 'Fitur Admin'}
+              customMessage={systemSettings?.featureMaintenanceCustomMessages?.[`admin_${activeTab}`]?.message || getAdminFeatureConfig(activeTab)?.defaultMessage}
+              customEstimate={systemSettings?.featureMaintenanceCustomMessages?.[`admin_${activeTab}`]?.estimate || getAdminFeatureConfig(activeTab)?.defaultEstimate}
+              onBackToDashboard={handleBackFromMaintenance}
+              role="admin"
+            />
+          ) : (
+            <>
+              {/* TAB 1: KELAS */}
           {activeTab === 'kelas' && (
             <div className="space-y-6">
               {/* Class Space Hero Banner */}
@@ -2261,6 +2306,8 @@ export const AdminPanel: React.FC = () => {
           {/* TAB 9B: CHAT & PESAN (Siswa, Admin, Owner) */}
           {(activeTab === 'chat_siswa' || (activeTab as string) === 'chat_owner') && (
             <AdminMemberChatView />
+          )}
+            </>
           )}
         </div>
       </main>

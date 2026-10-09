@@ -588,6 +588,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     aiMaintenanceTitle: 'AI Assistant Sedang Bersiap!',
     aiMaintenanceMessage: 'Fitur AI Assistant sedang dalam tahap pengembangan developer, mohon ditunggu ya! Kami sedang mematangkan asisten bimbingan belajar cerdas terbaik untuk Anda.',
     aiProgressPercent: 85,
+    adminFeatureMaintenance: {},
+    memberFeatureMaintenance: {},
+    featureMaintenanceCustomMessages: {},
   };
 
   const [systemSettings, setSystemSettings] = useState<SystemSettings>(() => {
@@ -1222,6 +1225,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             aiMaintenanceTitle: s.ai_maintenance_title || defaultSystemSettings.aiMaintenanceTitle,
             aiMaintenanceMessage: s.ai_maintenance_message || defaultSystemSettings.aiMaintenanceMessage,
             aiProgressPercent: s.ai_progress_percent ?? 85,
+            adminFeatureMaintenance: s.admin_feature_maintenance || {},
+            memberFeatureMaintenance: s.member_feature_maintenance || {},
+            featureMaintenanceCustomMessages: s.feature_maintenance_custom_messages || {},
           };
           setSystemSettings(mapped);
           localStorage.setItem('remindtask_global_v5_system_settings', JSON.stringify(mapped));
@@ -2128,6 +2134,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               aiMaintenanceTitle: s.ai_maintenance_title || defaultSystemSettings.aiMaintenanceTitle,
               aiMaintenanceMessage: s.ai_maintenance_message || defaultSystemSettings.aiMaintenanceMessage,
               aiProgressPercent: s.ai_progress_percent ?? 85,
+              adminFeatureMaintenance: s.admin_feature_maintenance || {},
+              memberFeatureMaintenance: s.member_feature_maintenance || {},
+              featureMaintenanceCustomMessages: s.feature_maintenance_custom_messages || {},
             };
             setSystemSettings(mapped);
             localStorage.setItem('remindtask_global_v5_system_settings', JSON.stringify(mapped));
@@ -7317,10 +7326,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ai_maintenance_title: newSettings.aiMaintenanceTitle || systemSettings.aiMaintenanceTitle,
           ai_maintenance_message: newSettings.aiMaintenanceMessage || systemSettings.aiMaintenanceMessage,
           ai_progress_percent: newSettings.aiProgressPercent !== undefined ? newSettings.aiProgressPercent : systemSettings.aiProgressPercent,
+          admin_feature_maintenance: newSettings.adminFeatureMaintenance !== undefined ? newSettings.adminFeatureMaintenance : (systemSettings.adminFeatureMaintenance || {}),
+          member_feature_maintenance: newSettings.memberFeatureMaintenance !== undefined ? newSettings.memberFeatureMaintenance : (systemSettings.memberFeatureMaintenance || {}),
+          feature_maintenance_custom_messages: newSettings.featureMaintenanceCustomMessages !== undefined ? newSettings.featureMaintenanceCustomMessages : (systemSettings.featureMaintenanceCustomMessages || {}),
           updated_at: new Date().toISOString(),
         };
 
-        await client.from('system_settings').upsert(payloadToSave);
+        const res = await client.from('system_settings').upsert(payloadToSave);
+        if (res.error) {
+          console.warn('Supabase update system_settings full payload warning:', res.error);
+          // Fallback without new jsonb columns if table hasn't been migrated with SQL yet
+          const fallbackPayload = {
+            id: 'global_config',
+            is_maintenance: payloadToSave.is_maintenance,
+            maintenance_title: payloadToSave.maintenance_title,
+            maintenance_message: payloadToSave.maintenance_message,
+            maintenance_estimate: payloadToSave.maintenance_estimate,
+            is_ai_maintenance: payloadToSave.is_ai_maintenance,
+            ai_maintenance_title: payloadToSave.ai_maintenance_title,
+            ai_maintenance_message: payloadToSave.ai_maintenance_message,
+            ai_progress_percent: payloadToSave.ai_progress_percent,
+            updated_at: payloadToSave.updated_at,
+          };
+          await client.from('system_settings').upsert(fallbackPayload);
+        }
       } catch (err) {
         console.warn('Supabase update system_settings error:', err);
       }

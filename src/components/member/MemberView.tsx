@@ -67,6 +67,8 @@ import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { formatIndonesianDate, getTaskDeadlineStatus, playNotificationSound } from '../../utils/notification';
+import { FeatureMaintenanceView } from '../maintenance/FeatureMaintenanceView';
+import { getMemberFeatureConfig, MEMBER_FEATURE_MENUS } from '../../constants/featureMenus';
 
 export const MemberView: React.FC = () => {
   const {
@@ -225,6 +227,26 @@ export const MemberView: React.FC = () => {
   };
 
   const [activeTab, setActiveTab] = useState<MemberTab>(getMemberTabFromUrl);
+
+  const isCurrentTabMaintenance = useMemo(() => {
+    if (currentUser?.role === 'owner') return false;
+    if (activeTab === 'ai_tutor') {
+      return Boolean(systemSettings?.isAiMaintenance || systemSettings?.memberFeatureMaintenance?.['ai_tutor']);
+    }
+    return Boolean(systemSettings?.memberFeatureMaintenance?.[activeTab]);
+  }, [systemSettings?.memberFeatureMaintenance, systemSettings?.isAiMaintenance, activeTab, currentUser]);
+
+  const handleBackFromMaintenance = () => {
+    // If dashboard is also under maintenance, redirect to first available non-maintenance feature
+    if (systemSettings?.memberFeatureMaintenance?.['dashboard']) {
+      const available = MEMBER_FEATURE_MENUS.find((f) => !systemSettings?.memberFeatureMaintenance?.[f.id]);
+      if (available) {
+        setActiveTab(available.id as MemberTab);
+        return;
+      }
+    }
+    setActiveTab('dashboard');
+  };
 
   const timeGreeting = useMemo(() => {
     const hour = new Date().getHours();
@@ -637,11 +659,18 @@ export const MemberView: React.FC = () => {
                               <Icon className={`w-3.5 h-3.5 shrink-0 ${isActive ? 'text-pink-300' : item.iconColor || 'text-slate-400'}`} />
                               <span className="truncate">{item.label}</span>
                             </div>
-                            {item.badge !== undefined && item.badge > 0 && (
-                              <span className="px-1.5 py-0.2 rounded-full bg-pink-500 text-white text-[9px] font-black font-mono ml-1 shrink-0">
-                                {item.badge}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-1.5 ml-1 shrink-0">
+                              {((item.id === 'ai_tutor' && systemSettings?.isAiMaintenance) || systemSettings?.memberFeatureMaintenance?.[item.id]) && (
+                                <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-300 font-mono text-[9px] font-bold">
+                                  Maint
+                                </span>
+                              )}
+                              {item.badge !== undefined && item.badge > 0 && (
+                                <span className="px-1.5 py-0.2 rounded-full bg-pink-500 text-white text-[9px] font-black font-mono">
+                                  {item.badge}
+                                </span>
+                              )}
+                            </div>
                           </button>
                         );
                       })}
@@ -723,6 +752,11 @@ export const MemberView: React.FC = () => {
               >
                 <Icon className="w-3 h-3" />
                 <span>{tab.label}</span>
+                {((tab.id === 'ai_tutor' && systemSettings?.isAiMaintenance) || systemSettings?.memberFeatureMaintenance?.[tab.id]) && (
+                  <span className="px-1.5 py-0.5 rounded-md bg-amber-500/20 border border-amber-500/30 text-amber-300 font-mono text-[9px] font-bold">
+                    Maint
+                  </span>
+                )}
                 {tab.badge !== undefined && tab.badge > 0 && (
                   <span className="w-1.5 h-1.5 rounded-full bg-pink-400" />
                 )}
@@ -734,7 +768,18 @@ export const MemberView: React.FC = () => {
 
       {/* MAIN VIEW */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 space-y-6">
-        {/* TAB 1: DASHBOARD */}
+        {isCurrentTabMaintenance ? (
+          <FeatureMaintenanceView
+            featureName={getMemberFeatureConfig(activeTab)?.name || activeTab}
+            categoryLabel={getMemberFeatureConfig(activeTab)?.categoryLabel || 'Fitur Siswa'}
+            customMessage={systemSettings?.featureMaintenanceCustomMessages?.[`member_${activeTab}`]?.message || getMemberFeatureConfig(activeTab)?.defaultMessage}
+            customEstimate={systemSettings?.featureMaintenanceCustomMessages?.[`member_${activeTab}`]?.estimate || getMemberFeatureConfig(activeTab)?.defaultEstimate}
+            onBackToDashboard={handleBackFromMaintenance}
+            role="member"
+          />
+        ) : (
+          <>
+            {/* TAB 1: DASHBOARD */}
         {activeTab === 'dashboard' && (
           <div className="space-y-6">
             {/* ACTIVE ATTENDANCE ALERT BANNER */}
@@ -937,126 +982,164 @@ export const MemberView: React.FC = () => {
             {/* 4 FEATURE CARDS: AI ASSISTANT, VIRTUAL PET, JADWAL PELAJARAN, ZONA FOKUS & GAMES */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {/* Card 1: RemindAI Personal Assistant */}
-              <div
-                onClick={() => setActiveTab('ai_tutor')}
-                className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#1c143d] via-[#161033] to-[#110d24] border border-purple-500/35 hover:border-pink-500/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
-              >
-                <div className="absolute top-0 right-0 w-28 h-28 bg-pink-500/10 rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors pointer-events-none" />
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
-                      <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
+              {(() => {
+                const isAiMaint = Boolean(systemSettings?.isAiMaintenance || systemSettings?.memberFeatureMaintenance?.['ai_tutor']);
+                return (
+                  <div
+                    onClick={() => setActiveTab('ai_tutor')}
+                    className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#1c143d] via-[#161033] to-[#110d24] border border-purple-500/35 hover:border-pink-500/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
+                  >
+                    <div className="absolute top-0 right-0 w-28 h-28 bg-pink-500/10 rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors pointer-events-none" />
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
+                          <Sparkles className="w-5 h-5 text-amber-300 animate-pulse" />
+                        </div>
+                        {isAiMaint ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1 shadow-sm shadow-amber-500/10 animate-pulse">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                            Maintenance
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-bold text-emerald-400 flex items-center gap-1 shadow-sm shadow-emerald-500/10">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                            Aktif &amp; Siap ⚡
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
+                        AI Personal Assistant
+                      </h4>
+                      <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                        {isAiMaint
+                          ? (systemSettings?.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!') + ' • Sedang tahap perbaikan & pengembangan.'
+                          : 'Teman ngobrol pintar & santai. Siap bantu bedah rumus, kodingan, atau curhat belajar kapan saja!'}
+                      </p>
                     </div>
-                    {systemSettings?.isAiMaintenance ? (
-                      <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1 shadow-sm shadow-amber-500/10 animate-pulse">
-                        <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                        Maintenance
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-[9px] font-bold text-emerald-400 flex items-center gap-1 shadow-sm shadow-emerald-500/10">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        Aktif &amp; Siap ⚡
-                      </span>
-                    )}
+                    <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
+                      <span>{isAiMaint ? 'Lihat Info Maintenance' : 'Mulai Obrolan AI'}</span>
+                      <span className="transition-transform group-hover:translate-x-1">→</span>
+                    </div>
                   </div>
-                  <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
-                    AI Personal Assistant
-                  </h4>
-                  <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    {systemSettings?.isAiMaintenance
-                      ? (systemSettings?.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!') + ' • Sedang tahap perbaikan & pengembangan.'
-                      : 'Teman ngobrol pintar & santai. Siap bantu bedah rumus, kodingan, atau curhat belajar kapan saja!'}
-                  </p>
-                </div>
-                <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
-                  <span>{systemSettings?.isAiMaintenance ? 'Lihat Info Maintenance' : 'Mulai Obrolan AI'}</span>
-                  <span className="transition-transform group-hover:translate-x-1">→</span>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Card 2: Forum & Marketplace Jasa */}
-              <div
-                onClick={() => setActiveTab('forum')}
-                className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#251336] via-[#1c0f2b] to-[#130b1f] border border-pink-500/35 hover:border-pink-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
-              >
-                <div className="absolute top-0 right-0 w-28 h-28 bg-pink-500/10 rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors pointer-events-none" />
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
-                      <Globe className="w-5 h-5 text-white" />
+              {(() => {
+                const isForumMaint = Boolean(systemSettings?.memberFeatureMaintenance?.['forum']);
+                return (
+                  <div
+                    onClick={() => setActiveTab('forum')}
+                    className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#251336] via-[#1c0f2b] to-[#130b1f] border border-pink-500/35 hover:border-pink-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
+                  >
+                    <div className="absolute top-0 right-0 w-28 h-28 bg-pink-500/10 rounded-full blur-2xl group-hover:bg-pink-500/20 transition-colors pointer-events-none" />
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-pink-500 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-pink-500/25">
+                          <Globe className="w-5 h-5 text-white" />
+                        </div>
+                        {isForumMaint ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1">
+                            Maintenance
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-[9px] font-bold text-pink-300">
+                            Komunitas &amp; Layanan
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
+                        Forum Kelas &amp; Global
+                      </h4>
+                      <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                        Wadah publikasi karya siswa, diskusi akademik, pertukaran layanan keahlian, dan komunikasi antarsiswa.
+                      </p>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-[9px] font-bold text-pink-300">
-                      Komunitas &amp; Layanan
-                    </span>
+                    <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
+                      <span>{isForumMaint ? 'Fitur Maintenance' : 'Buka Forum & Komunitas'}</span>
+                      <span className="transition-transform group-hover:translate-x-1">→</span>
+                    </div>
                   </div>
-                  <h4 className="text-base font-black text-white group-hover:text-pink-300 transition-colors">
-                    Forum Kelas &amp; Global
-                  </h4>
-                  <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    Wadah publikasi karya siswa, diskusi akademik, pertukaran layanan keahlian, dan komunikasi antarsiswa.
-                  </p>
-                </div>
-                <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-pink-400 group-hover:text-pink-300">
-                  <span>Buka Forum &amp; Komunitas</span>
-                  <span className="transition-transform group-hover:translate-x-1">→</span>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Card 3: Jadwal Pelajaran Hari Ini */}
-              <div
-                onClick={() => setActiveTab('jadwal')}
-                className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#121938] via-[#0f142e] to-[#0a0d20] border border-blue-500/35 hover:border-cyan-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
-              >
-                <div className="absolute top-0 right-0 w-28 h-28 bg-blue-500/10 rounded-full blur-2xl group-hover:bg-blue-500/20 transition-colors pointer-events-none" />
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-500 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/25">
-                      <CalendarDays className="w-5 h-5 text-white" />
+              {(() => {
+                const isJadwalMaint = Boolean(systemSettings?.memberFeatureMaintenance?.['jadwal']);
+                return (
+                  <div
+                    onClick={() => setActiveTab('jadwal')}
+                    className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#121938] via-[#0f142e] to-[#0a0d20] border border-blue-500/35 hover:border-cyan-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
+                  >
+                    <div className="absolute top-0 right-0 w-28 h-28 bg-blue-500/10 rounded-full blur-2xl group-hover:bg-blue-500/20 transition-colors pointer-events-none" />
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-blue-500 to-cyan-500 flex items-center justify-center text-white shadow-lg shadow-blue-500/25">
+                          <CalendarDays className="w-5 h-5 text-white" />
+                        </div>
+                        {isJadwalMaint ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1">
+                            Maintenance
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-[9px] font-bold text-cyan-300">
+                            {todaySchedulesCount > 0 ? `📅 ${todaySchedulesCount} Pelajaran Hari Ini` : 'Jadwal Kelas 📅'}
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-base font-black text-white group-hover:text-cyan-300 transition-colors">
+                        Jadwal Pelajaran
+                      </h4>
+                      <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                        Lihat jadwal mata pelajaran/kuliah mingguan dan aktifkan alarm pengingat otomatis 2 jam sebelum kelas!
+                      </p>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/30 text-[9px] font-bold text-cyan-300">
-                      {todaySchedulesCount > 0 ? `📅 ${todaySchedulesCount} Pelajaran Hari Ini` : 'Jadwal Kelas 📅'}
-                    </span>
+                    <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-cyan-400 group-hover:text-cyan-300">
+                      <span>{isJadwalMaint ? 'Fitur Maintenance' : 'Buka Jadwal Kelas'}</span>
+                      <span className="transition-transform group-hover:translate-x-1">→</span>
+                    </div>
                   </div>
-                  <h4 className="text-base font-black text-white group-hover:text-cyan-300 transition-colors">
-                    Jadwal Pelajaran
-                  </h4>
-                  <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    Lihat jadwal mata pelajaran/kuliah mingguan dan aktifkan alarm pengingat otomatis 2 jam sebelum kelas!
-                  </p>
-                </div>
-                <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-cyan-400 group-hover:text-cyan-300">
-                  <span>Buka Jadwal Kelas</span>
-                  <span className="transition-transform group-hover:translate-x-1">→</span>
-                </div>
-              </div>
+                );
+              })()}
 
               {/* Card 4: Arena Game & Fokus */}
-              <div
-                onClick={() => setActiveTab('game')}
-                className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#181333] via-[#130f2b] to-[#0f0c22] border border-amber-500/35 hover:border-amber-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
-              >
-                <div className="absolute top-0 right-0 w-28 h-28 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-colors pointer-events-none" />
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/25">
-                      <Gamepad2 className="w-5 h-5 text-amber-200" />
+              {(() => {
+                const isGameMaint = Boolean(systemSettings?.memberFeatureMaintenance?.['game']);
+                return (
+                  <div
+                    onClick={() => setActiveTab('game')}
+                    className="group relative p-5 rounded-3xl bg-gradient-to-br from-[#181333] via-[#130f2b] to-[#0f0c22] border border-amber-500/35 hover:border-amber-400/70 transition-all cursor-pointer shadow-lg overflow-hidden flex flex-col justify-between"
+                  >
+                    <div className="absolute top-0 right-0 w-28 h-28 bg-amber-500/10 rounded-full blur-2xl group-hover:bg-amber-500/20 transition-colors pointer-events-none" />
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-amber-500 to-orange-600 flex items-center justify-center text-white shadow-lg shadow-amber-500/25">
+                          <Gamepad2 className="w-5 h-5 text-amber-200" />
+                        </div>
+                        {isGameMaint ? (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-[9px] font-bold text-amber-300 flex items-center gap-1">
+                            Maintenance
+                          </span>
+                        ) : (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[9px] font-bold text-amber-300">
+                            Asah Otak 🎮
+                          </span>
+                        )}
+                      </div>
+                      <h4 className="text-base font-black text-white group-hover:text-amber-300 transition-colors">
+                        Arena Game &amp; Kuis
+                      </h4>
+                      <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
+                        Kuis Kilat 20 Detik, Duel Hitung Cepat Turbo, Teka-Teki Nalar, dan raih XP untuk naikkan level akun!
+                      </p>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-[9px] font-bold text-amber-300">
-                      Asah Otak 🎮
-                    </span>
+                    <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-amber-400 group-hover:text-amber-300">
+                      <span>{isGameMaint ? 'Fitur Maintenance' : 'Masuk Arena Game'}</span>
+                      <span className="transition-transform group-hover:translate-x-1">→</span>
+                    </div>
                   </div>
-                  <h4 className="text-base font-black text-white group-hover:text-amber-300 transition-colors">
-                    Arena Game &amp; Kuis
-                  </h4>
-                  <p className="text-xs text-slate-300 mt-1 line-clamp-2 leading-relaxed">
-                    Kuis Kilat 20 Detik, Duel Hitung Cepat Turbo, Teka-Teki Nalar, dan raih XP untuk naikkan level akun!
-                  </p>
-                </div>
-                <div className="mt-4 flex items-center gap-1.5 text-xs font-bold text-amber-400 group-hover:text-amber-300">
-                  <span>Masuk Arena Game</span>
-                  <span className="transition-transform group-hover:translate-x-1">→</span>
-                </div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* Quick List: Urgent Tasks due soon */}
@@ -1734,6 +1817,8 @@ export const MemberView: React.FC = () => {
         {/* TAB 10: SETTINGS */}
         {activeTab === 'setting' && (
           <MemberSettingsView />
+        )}
+          </>
         )}
       </main>
 

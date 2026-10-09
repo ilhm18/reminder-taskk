@@ -237,6 +237,9 @@ export interface SystemSettings {
   aiMaintenanceTitle: string;
   aiMaintenanceMessage: string;
   aiProgressPercent: number;
+  adminFeatureMaintenance?: Record<string, boolean>;
+  memberFeatureMaintenance?: Record<string, boolean>;
+  featureMaintenanceCustomMessages?: Record<string, { message?: string; estimate?: string }>;
 }
 
 export interface ClassAccessLog {

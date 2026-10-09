@@ -46,6 +46,12 @@ import {
   ChevronRight,
   User as UserIcon,
   FileText,
+  Lock,
+  Unlock,
+  SlidersHorizontal,
+  Settings2,
+  FileCode,
+  Layers,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ClassItem, Task, User, ActivityLogItem } from '../../types';
@@ -64,9 +70,68 @@ import { ForumView } from '../forum/ForumView';
 import { ThemeToggle } from '../common/ThemeToggle';
 import { RealTimeClock } from '../common/RealTimeClock';
 import { MaintenanceScreen } from '../maintenance/MaintenanceScreen';
+import { FeatureMaintenanceView } from '../maintenance/FeatureMaintenanceView';
 import { ProfileAvatarUploader } from '../common/ProfileAvatarUploader';
 import { formatIndonesianDate, getTaskDeadlineStatus } from '../../utils/notification';
 import { getStoredSupabaseConfig, saveSupabaseConfig, testSupabaseConnection, SUPABASE_SQL_SCHEMA, getSupabaseClient } from '../../services/supabase';
+import {
+  ADMIN_FEATURE_MENUS,
+  MEMBER_FEATURE_MENUS,
+  FeatureMenuConfig,
+} from '../../constants/featureMenus';
+
+export const FEATURE_MAINTENANCE_SQL = `-- ========================================================
+-- REMINDTASK: TABEL & KOLOM KONTROL MAINTENANCE PER FITUR
+-- Menambahkan kolom admin_feature_maintenance & member_feature_maintenance
+-- ke tabel public.system_settings untuk mengontrol semua fitur menu POV Admin & Member.
+-- ========================================================
+
+-- 1. Tambahkan kolom JSONB untuk pengaturan kontrol fitur jika belum ada
+ALTER TABLE IF EXISTS public.system_settings 
+  ADD COLUMN IF NOT EXISTS admin_feature_maintenance JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS member_feature_maintenance JSONB DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS feature_maintenance_custom_messages JSONB DEFAULT '{}'::jsonb;
+
+-- 2. Pastikan baris konfigurasi global 'global_config' tersedia
+INSERT INTO public.system_settings (
+  id, 
+  is_maintenance, 
+  is_ai_maintenance, 
+  admin_feature_maintenance, 
+  member_feature_maintenance, 
+  feature_maintenance_custom_messages
+)
+VALUES (
+  'global_config', 
+  false, 
+  false, 
+  '{}'::jsonb, 
+  '{}'::jsonb, 
+  '{}'::jsonb
+)
+ON CONFLICT (id) DO NOTHING;
+
+-- 3. Beri izin akses publik untuk realtime & read/update
+DROP POLICY IF EXISTS "Akses publik system settings" ON public.system_settings;
+CREATE POLICY "Akses publik system settings" ON public.system_settings FOR ALL USING (true) WITH CHECK (true);
+
+-- 4. Aktifkan Realtime Publikasi
+ALTER TABLE public.system_settings REPLICA IDENTITY FULL;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' 
+      AND schemaname = 'public' 
+      AND tablename = 'system_settings'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.system_settings;
+  END IF;
+END $$;
+
+-- 5. Muat ulang cache schema PostgREST
+NOTIFY pgrst, 'reload schema';
+`;
 
 const ACCESS_REALTIME_SQL = `-- ========================================================
 -- REMINDTASK: SINKRONISASI REALTIME TOTAL AKSES & LOGIN
@@ -291,6 +356,52 @@ export const OwnerPanel: React.FC = () => {
 
   const [isSavingMaintenance, setIsSavingMaintenance] = useState(false);
 
+  // Granular Feature Maintenance State (Admin & Member POV)
+  const [adminFeatureMaintenance, setAdminFeatureMaintenance] = useState<Record<string, boolean>>(
+    systemSettings?.adminFeatureMaintenance || {}
+  );
+  const [memberFeatureMaintenance, setMemberFeatureMaintenance] = useState<Record<string, boolean>>(
+    systemSettings?.memberFeatureMaintenance || {}
+  );
+  const [featureCustomMessages, setFeatureCustomMessages] = useState<Record<string, { message?: string; estimate?: string }>>(
+    systemSettings?.featureMaintenanceCustomMessages || {}
+  );
+  const [featureRoleTab, setFeatureRoleTab] = useState<'global' | 'admin' | 'member' | 'all'>('global');
+  const [featureSearchQuery, setFeatureSearchQuery] = useState('');
+  const [featureCategoryFilter, setFeatureCategoryFilter] = useState<'all' | 'utama' | 'akademik' | 'komunikasi' | 'hiburan' | 'lainnya'>('all');
+  const [editingCustomFeature, setEditingCustomFeature] = useState<{
+    role: 'admin' | 'member';
+    id: string;
+    name: string;
+    defaultMessage: string;
+    defaultEstimate: string;
+  } | null>(null);
+  const [customFeatureMessageInput, setCustomFeatureMessageInput] = useState('');
+  const [customFeatureEstimateInput, setCustomFeatureEstimateInput] = useState('');
+  const [showSqlFeatureModal, setShowSqlFeatureModal] = useState(false);
+  const [copiedSqlFeature, setCopiedSqlFeature] = useState(false);
+  const [isSavingFeatures, setIsSavingFeatures] = useState(false);
+  const [previewFeatureData, setPreviewFeatureData] = useState<{
+    name: string;
+    categoryLabel: string;
+    message: string;
+    estimate: string;
+    role: 'admin' | 'member';
+  } | null>(null);
+
+  // Global Website Maintenance & AI Assistant Config States
+  const [showWebsiteConfigModal, setShowWebsiteConfigModal] = useState(false);
+  const [showAiConfigModal, setShowAiConfigModal] = useState(false);
+  const [showAiPreviewModal, setShowAiPreviewModal] = useState(false);
+
+  const [websiteConfigTitle, setWebsiteConfigTitle] = useState('');
+  const [websiteConfigMessage, setWebsiteConfigMessage] = useState('');
+  const [websiteConfigEstimate, setWebsiteConfigEstimate] = useState('');
+
+  const [aiConfigTitle, setAiConfigTitle] = useState('');
+  const [aiConfigMessage, setAiConfigMessage] = useState('');
+  const [aiConfigProgress, setAiConfigProgress] = useState(85);
+
   useEffect(() => {
     if (systemSettings) {
       setMaintenanceForm({
@@ -303,8 +414,232 @@ export const OwnerPanel: React.FC = () => {
         aiMaintenanceMessage: systemSettings.aiMaintenanceMessage,
         aiProgressPercent: systemSettings.aiProgressPercent,
       });
+      setAdminFeatureMaintenance(systemSettings.adminFeatureMaintenance || {});
+      setMemberFeatureMaintenance(systemSettings.memberFeatureMaintenance || {});
+      setFeatureCustomMessages(systemSettings.featureMaintenanceCustomMessages || {});
     }
   }, [systemSettings]);
+
+  const handleToggleAdminFeature = (featureId: string) => {
+    setAdminFeatureMaintenance((prev) => ({
+      ...prev,
+      [featureId]: !prev[featureId],
+    }));
+  };
+
+  const handleToggleMemberFeature = (featureId: string) => {
+    setMemberFeatureMaintenance((prev) => {
+      const nextVal = !prev[featureId];
+      if (featureId === 'ai_tutor') {
+        setMaintenanceForm((mf) => ({ ...mf, isAiMaintenance: nextVal }));
+      }
+      return {
+        ...prev,
+        [featureId]: nextVal,
+      };
+    });
+  };
+
+  const handleBulkToggle = (role: 'global' | 'admin' | 'member' | 'all', status: boolean) => {
+    if (role === 'global') {
+      setMaintenanceForm((prev) => ({
+        ...prev,
+        isMaintenance: status,
+        isAiMaintenance: status,
+      }));
+      setMemberFeatureMaintenance((prev) => ({
+        ...prev,
+        ai_tutor: status,
+      }));
+      showToast(
+        status
+          ? 'Sistem Website & AI diset ke mode MAINTENANCE (Nonaktif)!'
+          : 'Sistem Website & AI dibuka kembali ke mode NORMAL (Aktif)!',
+        status ? 'warn' : 'success'
+      );
+      return;
+    }
+    if (role === 'all') {
+      setMaintenanceForm((prev) => ({
+        ...prev,
+        isMaintenance: status,
+        isAiMaintenance: status,
+      }));
+      const updatedAdmin: Record<string, boolean> = {};
+      ADMIN_FEATURE_MENUS.forEach((f) => {
+        updatedAdmin[f.id] = status;
+      });
+      setAdminFeatureMaintenance(updatedAdmin);
+      const updatedMember: Record<string, boolean> = {};
+      MEMBER_FEATURE_MENUS.forEach((f) => {
+        updatedMember[f.id] = status;
+      });
+      setMemberFeatureMaintenance(updatedMember);
+      showToast(
+        status
+          ? 'Seluruh Fitur Platform diset ke mode MAINTENANCE (Nonaktif)!'
+          : 'Seluruh Fitur Platform dibuka kembali ke mode NORMAL (Aktif)!',
+        status ? 'warn' : 'success'
+      );
+      return;
+    }
+    const list = role === 'admin' ? ADMIN_FEATURE_MENUS : MEMBER_FEATURE_MENUS;
+    const updated: Record<string, boolean> = {};
+    list.forEach((f) => {
+      updated[f.id] = status;
+    });
+    if (role === 'admin') {
+      setAdminFeatureMaintenance(updated);
+    } else {
+      setMemberFeatureMaintenance(updated);
+      setMaintenanceForm((mf) => ({ ...mf, isAiMaintenance: status }));
+    }
+    showToast(
+      status
+        ? `Semua fitur ${role === 'admin' ? 'Admin' : 'Siswa'} diset ke mode MAINTENANCE (Nonaktif)!`
+        : `Semua fitur ${role === 'admin' ? 'Admin' : 'Siswa'} dibuka kembali (NORMAL/Aktif)!`,
+      status ? 'warn' : 'success'
+    );
+  };
+
+  const handleSaveFeatureSettings = async () => {
+    setIsSavingFeatures(true);
+    await updateSystemSettings({
+      ...maintenanceForm,
+      adminFeatureMaintenance,
+      memberFeatureMaintenance,
+      featureMaintenanceCustomMessages: featureCustomMessages,
+    });
+    setIsSavingFeatures(false);
+    showToast('Pengaturan kontrol fitur & sistem berhasil disimpan ke Supabase & LocalStorage!', 'success');
+  };
+
+  const handleOpenCustomMessageModal = (role: 'admin' | 'member', feature: FeatureMenuConfig) => {
+    const key = `${role}_${feature.id}`;
+    const existing = featureCustomMessages[key];
+    setEditingCustomFeature({
+      role,
+      id: feature.id,
+      name: feature.name,
+      defaultMessage: feature.defaultMessage,
+      defaultEstimate: feature.defaultEstimate,
+    });
+    setCustomFeatureMessageInput(existing?.message || feature.defaultMessage);
+    setCustomFeatureEstimateInput(existing?.estimate || feature.defaultEstimate);
+  };
+
+  const handleSaveCustomFeatureMessage = () => {
+    if (!editingCustomFeature) return;
+    const key = `${editingCustomFeature.role}_${editingCustomFeature.id}`;
+    setFeatureCustomMessages((prev) => ({
+      ...prev,
+      [key]: {
+        message: customFeatureMessageInput.trim() || undefined,
+        estimate: customFeatureEstimateInput.trim() || undefined,
+      },
+    }));
+    setEditingCustomFeature(null);
+    showToast(`Pesan maintenance untuk fitur "${editingCustomFeature.name}" berhasil diatur!`, 'success');
+  };
+
+  const handleResetCustomFeatureMessage = () => {
+    if (!editingCustomFeature) return;
+    const key = `${editingCustomFeature.role}_${editingCustomFeature.id}`;
+    setFeatureCustomMessages((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+    setEditingCustomFeature(null);
+    showToast(`Pesan maintenance untuk fitur "${editingCustomFeature.name}" dikembalikan ke default.`, 'info');
+  };
+
+  const handleCopySqlFeature = () => {
+    try {
+      navigator.clipboard.writeText(FEATURE_MAINTENANCE_SQL);
+      setCopiedSqlFeature(true);
+      setTimeout(() => setCopiedSqlFeature(false), 3000);
+      showToast('Skrip SQL kontrol fitur berhasil disalin ke clipboard!', 'success');
+    } catch {
+      showToast('Gagal menyalin otomatis, silakan salin teks SQL secara manual.', 'warn');
+    }
+  };
+
+  const handleOpenWebsiteConfig = () => {
+    setWebsiteConfigTitle(maintenanceForm.maintenanceTitle || 'Pemeliharaan Server & Pembaruan Sistem');
+    setWebsiteConfigMessage(maintenanceForm.maintenanceMessage || 'Kami sedang melakukan peningkatan infrastruktur dan optimalisasi database Supabase untuk menghadirkan performa terbaik. Mohon bersabar, kami akan segera kembali.');
+    setWebsiteConfigEstimate(maintenanceForm.maintenanceEstimate || 'Segera selesai dalam beberapa saat');
+    setShowWebsiteConfigModal(true);
+  };
+
+  const handleSaveWebsiteConfig = async () => {
+    const updated = {
+      ...maintenanceForm,
+      maintenanceTitle: websiteConfigTitle.trim() || 'Pemeliharaan Server & Pembaruan Sistem',
+      maintenanceMessage: websiteConfigMessage.trim() || 'Kami sedang melakukan peningkatan infrastruktur dan optimalisasi database Supabase untuk menghadirkan performa terbaik. Mohon bersabar, kami akan segera kembali.',
+      maintenanceEstimate: websiteConfigEstimate.trim() || 'Segera selesai dalam beberapa saat',
+    };
+    setMaintenanceForm(updated);
+    await updateSystemSettings({
+      maintenanceTitle: updated.maintenanceTitle,
+      maintenanceMessage: updated.maintenanceMessage,
+      maintenanceEstimate: updated.maintenanceEstimate,
+    });
+    setShowWebsiteConfigModal(false);
+    showToast('Pengaturan tampilan pemeliharaan website berhasil disimpan!', 'success');
+  };
+
+  const handleOpenAiConfig = () => {
+    setAiConfigTitle(maintenanceForm.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!');
+    setAiConfigMessage(maintenanceForm.aiMaintenanceMessage || 'Fitur AI Assistant sedang dalam tahap pengembangan developer, mohon ditunggu ya! Kami sedang mematangkan asisten bimbingan belajar cerdas terbaik untuk Anda.');
+    setAiConfigProgress(maintenanceForm.aiProgressPercent ?? 85);
+    setShowAiConfigModal(true);
+  };
+
+  const handleSaveAiConfig = async () => {
+    const updated = {
+      ...maintenanceForm,
+      aiMaintenanceTitle: aiConfigTitle.trim() || 'AI Assistant Sedang Bersiap!',
+      aiMaintenanceMessage: aiConfigMessage.trim() || 'Fitur AI Assistant sedang dalam tahap pengembangan developer, mohon ditunggu ya! Kami sedang mematangkan asisten bimbingan belajar cerdas terbaik untuk Anda.',
+      aiProgressPercent: aiConfigProgress,
+    };
+    setMaintenanceForm(updated);
+    await updateSystemSettings({
+      aiMaintenanceTitle: updated.aiMaintenanceTitle,
+      aiMaintenanceMessage: updated.aiMaintenanceMessage,
+      aiProgressPercent: updated.aiProgressPercent,
+    });
+    setShowAiConfigModal(false);
+    showToast('Pengaturan mode pengembangan AI Assistant berhasil disimpan!', 'success');
+  };
+
+  const handleToggleWebsiteMaintenance = async () => {
+    const nextVal = !maintenanceForm.isMaintenance;
+    setMaintenanceForm((prev) => ({ ...prev, isMaintenance: nextVal }));
+    await updateSystemSettings({ isMaintenance: nextVal });
+    showToast(
+      nextVal
+        ? 'Mode Pemeliharaan Website diaktifkan! Pengunjung akan melihat layar maintenance.'
+        : 'Mode Pemeliharaan Website dimatikan! Website berjalan normal kembali.',
+      nextVal ? 'warn' : 'success'
+    );
+  };
+
+  const handleToggleAiMaintenance = async () => {
+    const nextVal = !maintenanceForm.isAiMaintenance;
+    setMaintenanceForm((prev) => ({ ...prev, isAiMaintenance: nextVal }));
+    setMemberFeatureMaintenance((prev) => ({ ...prev, ai_tutor: nextVal }));
+    await updateSystemSettings({
+      isAiMaintenance: nextVal,
+      memberFeatureMaintenance: { ...memberFeatureMaintenance, ai_tutor: nextVal },
+    });
+    showToast(
+      nextVal
+        ? 'Fitur AI Assistant diset ke Mode Pengembangan!'
+        : 'Fitur AI Assistant dibuka ke mode Normal (Live Chat)!',
+      nextVal ? 'warn' : 'success'
+    );
+  };
 
   useEffect(() => {
     try {
@@ -2588,273 +2923,723 @@ export const OwnerPanel: React.FC = () => {
                 </div>
               </div>
 
-              {/* Grid 2 Columns: 1. Global System Maintenance, 2. AI Assistant Feature Mode */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* 1. Global System Maintenance Card */}
-                <div className={`rounded-3xl border p-6 space-y-5 transition-all shadow-xl ${
-                  maintenanceForm.isMaintenance
-                    ? 'bg-[#181024] border-rose-500/50 shadow-rose-950/30'
-                    : 'bg-[#141126] border-[#29224d]'
-                }`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                        maintenanceForm.isMaintenance
-                          ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
-                          : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                      }`}>
-                        <Wrench className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <h3 className="font-extrabold text-white text-lg">
-                          Mode Pemeliharaan Website
+              {/* ======================================================== */}
+              {/* KONTROL MAINTENANCE PER FITUR MENU (POV SISTEM, ADMIN, SISWA) */}
+              {/* ======================================================== */}
+              <div className="rounded-3xl border border-[#31255e] bg-[#140f2b] p-6 sm:p-8 space-y-6 shadow-2xl">
+                {/* Header */}
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-5 border-b border-[#251b47]">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-purple-600 to-pink-600 text-white flex items-center justify-center shadow-lg shadow-pink-500/20 shrink-0">
+                      <SlidersHorizontal className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-extrabold text-white text-lg sm:text-xl">
+                          Kontrol Maintenance Per Fitur Menu
                         </h3>
-                        <p className="text-xs text-slate-400">
-                          Tampilan halaman maintenance saat diakses pengunjung & siswa
-                        </p>
-                      </div>
-                    </div>
-
-                    <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border ${
-                      maintenanceForm.isMaintenance
-                        ? 'bg-rose-500/20 border-rose-500/40 text-rose-300 animate-pulse'
-                        : 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                    }`}>
-                      {maintenanceForm.isMaintenance ? '🔴 Aktif (Maintenance)' : '🟢 Normal (Online)'}
-                    </span>
-                  </div>
-
-                  {/* Toggle Switch Button */}
-                  <div className="p-4 rounded-2xl bg-[#0f0c1e] border border-[#261f47] flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-white">Status Saklar Maintenance</div>
-                      <div className="text-[11px] text-slate-400">
-                        {maintenanceForm.isMaintenance
-                          ? 'Pengunjung & member melihat layar pemeliharaan server.'
-                          : 'Website berjalan normal untuk seluruh pengguna.'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setMaintenanceForm((prev) => ({ ...prev, isMaintenance: !prev.isMaintenance }))}
-                      className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors cursor-pointer ${
-                        maintenanceForm.isMaintenance ? 'bg-rose-500' : 'bg-slate-700'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
-                          maintenanceForm.isMaintenance ? 'translate-x-8' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Customization Inputs */}
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Judul Layar Pemeliharaan
-                      </label>
-                      <input
-                        type="text"
-                        value={maintenanceForm.maintenanceTitle}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, maintenanceTitle: e.target.value }))}
-                        placeholder="Contoh: Pemeliharaan Server & Pembaruan Sistem"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#0d0a1a] border border-[#2e2652] focus:border-pink-500 text-xs text-white outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Pesan Deskripsi untuk Pengguna
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={maintenanceForm.maintenanceMessage}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, maintenanceMessage: e.target.value }))}
-                        placeholder="Ketikkan pesan pemeliharaan untuk pengguna..."
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#0d0a1a] border border-[#2e2652] focus:border-pink-500 text-xs text-white outline-none resize-none leading-relaxed"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Estimasi Waktu Pengerjaan
-                      </label>
-                      <input
-                        type="text"
-                        value={maintenanceForm.maintenanceEstimate}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, maintenanceEstimate: e.target.value }))}
-                        placeholder="Contoh: Segera selesai dalam beberapa saat / Estimasi 30 Menit"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#0d0a1a] border border-[#2e2652] focus:border-pink-500 text-xs text-white outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Quick Save Card Button */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        setIsSavingMaintenance(true);
-                        await updateSystemSettings({
-                          isMaintenance: maintenanceForm.isMaintenance,
-                          maintenanceTitle: maintenanceForm.maintenanceTitle,
-                          maintenanceMessage: maintenanceForm.maintenanceMessage,
-                          maintenanceEstimate: maintenanceForm.maintenanceEstimate,
-                        });
-                        setIsSavingMaintenance(false);
-                      }}
-                      className="w-full py-2.5 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:opacity-90 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
-                    >
-                      Terapkan Status Maintenance Website
-                    </button>
-                  </div>
-                </div>
-
-                {/* 2. AI Assistant Feature Mode Card */}
-                <div className={`rounded-3xl border p-6 space-y-5 transition-all shadow-xl ${
-                  maintenanceForm.isAiMaintenance
-                    ? 'bg-[#181428] border-amber-500/40 shadow-amber-950/20'
-                    : 'bg-[#141126] border-[#29224d]'
-                }`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${
-                        maintenanceForm.isAiMaintenance
-                          ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
-                          : 'bg-purple-500/20 text-purple-400 border border-purple-500/40'
-                      }`}>
-                        <Bot className="w-6 h-6" />
-                      </div>
-                      <div>
-                        <h3 className="font-extrabold text-white text-lg">
-                          Status Fitur AI Assistant
-                        </h3>
-                        <p className="text-xs text-slate-400">
-                          Buka obrolan tutor cerdas atau kunci ke layar tahap pengembangan
-                        </p>
-                      </div>
-                    </div>
-
-                    <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider border ${
-                      maintenanceForm.isAiMaintenance
-                        ? 'bg-amber-500/20 border-amber-500/40 text-amber-300'
-                        : 'bg-purple-500/20 border-purple-500/40 text-purple-300'
-                    }`}>
-                      {maintenanceForm.isAiMaintenance ? '🟡 Mode Pengembangan' : '🟢 AI Aktif (Live Chat)'}
-                    </span>
-                  </div>
-
-                  {/* Toggle Switch Button */}
-                  <div className="p-4 rounded-2xl bg-[#0f0c1e] border border-[#261f47] flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-bold text-white">Mode Fitur AI Assistant</div>
-                      <div className="text-[11px] text-slate-400">
-                        {maintenanceForm.isAiMaintenance
-                          ? 'Siswa melihat layar "AI Assistant Sedang Bersiap! (Tahap Pengembangan)".'
-                          : 'Siswa dapat langsung membuka dan berinteraksi dengan AI Chat Tutor.'}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setMaintenanceForm((prev) => ({ ...prev, isAiMaintenance: !prev.isAiMaintenance }))}
-                      className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors cursor-pointer ${
-                        maintenanceForm.isAiMaintenance ? 'bg-amber-500' : 'bg-purple-600'
-                      }`}
-                    >
-                      <span
-                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-md transition-transform ${
-                          maintenanceForm.isAiMaintenance ? 'translate-x-8' : 'translate-x-1'
-                        }`}
-                      />
-                    </button>
-                  </div>
-
-                  {/* Customization Inputs */}
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Judul Status AI
-                      </label>
-                      <input
-                        type="text"
-                        value={maintenanceForm.aiMaintenanceTitle}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, aiMaintenanceTitle: e.target.value }))}
-                        placeholder="Contoh: AI Assistant Sedang Bersiap!"
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#0d0a1a] border border-[#2e2652] focus:border-pink-500 text-xs text-white outline-none"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                        Pesan Deskripsi Mode Pengembangan
-                      </label>
-                      <textarea
-                        rows={3}
-                        value={maintenanceForm.aiMaintenanceMessage}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, aiMaintenanceMessage: e.target.value }))}
-                        placeholder="Ketikkan pesan pengembangan AI..."
-                        className="w-full px-4 py-2.5 rounded-xl bg-[#0d0a1a] border border-[#2e2652] focus:border-pink-500 text-xs text-white outline-none resize-none leading-relaxed"
-                      />
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1.5">
-                        <label className="text-xs font-bold text-slate-300">
-                          Progress Indikator Pengembangan (%)
-                        </label>
-                        <span className="text-xs font-mono font-bold text-amber-400">
-                          {maintenanceForm.aiProgressPercent}%
+                        <span className="px-2.5 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 font-mono text-[10px] font-bold">
+                          Sistem, Admin &amp; Siswa POV
                         </span>
                       </div>
-                      <input
-                        type="range"
-                        min={0}
-                        max={100}
-                        value={maintenanceForm.aiProgressPercent}
-                        onChange={(e) => setMaintenanceForm((prev) => ({ ...prev, aiProgressPercent: Number(e.target.value) }))}
-                        className="w-full accent-amber-400 cursor-pointer"
-                      />
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Kunci atau buka akses menu &amp; modul platform secara granular tanpa mematikan seluruh aplikasi.
+                      </p>
                     </div>
                   </div>
 
-                  {/* Quick Save Card Button */}
-                  <div className="pt-2">
+                  <div className="flex flex-wrap items-center gap-2.5">
                     <button
                       type="button"
-                      onClick={async () => {
-                        setIsSavingMaintenance(true);
-                        await updateSystemSettings({
-                          isAiMaintenance: maintenanceForm.isAiMaintenance,
-                          aiMaintenanceTitle: maintenanceForm.aiMaintenanceTitle,
-                          aiMaintenanceMessage: maintenanceForm.aiMaintenanceMessage,
-                          aiProgressPercent: maintenanceForm.aiProgressPercent,
-                        });
-                        setIsSavingMaintenance(false);
-                      }}
-                      className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-purple-600 hover:opacity-90 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                      onClick={() => setShowSqlFeatureModal(true)}
+                      className="px-3.5 py-2.5 rounded-xl bg-[#1d1538] hover:bg-[#2a1e50] text-purple-300 border border-purple-500/30 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
                     >
-                      Terapkan Status Fitur AI Assistant
+                      <FileCode className="w-4 h-4 text-purple-400" />
+                      <span>Skrip SQL Supabase</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isSavingFeatures}
+                      onClick={handleSaveFeatureSettings}
+                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 hover:opacity-90 disabled:opacity-50 text-white text-xs font-black flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-pink-500/25 active:scale-95"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>{isSavingFeatures ? 'Menyimpan ke Cloud...' : 'Simpan Semua Fitur'}</span>
                     </button>
                   </div>
                 </div>
-              </div>
 
-              {/* Action Buttons: Preview Screens */}
-              <div className="flex flex-wrap items-center justify-between gap-4 p-5 rounded-3xl bg-[#141126] border border-[#272144]">
-                <div>
-                  <h4 className="text-sm font-bold text-white">Uji & Pratinjau Tampilan Pengguna</h4>
-                  <p className="text-xs text-slate-400">Lihat simulasi persis bagaimana siswa/member melihat halaman pemeliharaan.</p>
+                {/* Sub-Kontrol Switcher Tabs */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                  <div className="inline-flex flex-wrap p-1.5 rounded-2xl bg-[#0c081e] border border-[#231845] gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setFeatureRoleTab('global')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                        featureRoleTab === 'global'
+                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>🌐 Sistem &amp; Website (2)</span>
+                      {((maintenanceForm.isMaintenance ? 1 : 0) + (maintenanceForm.isAiMaintenance ? 1 : 0)) > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[9px]">
+                          {(maintenanceForm.isMaintenance ? 1 : 0) + (maintenanceForm.isAiMaintenance ? 1 : 0)} Maint
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFeatureRoleTab('admin')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                        featureRoleTab === 'admin'
+                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>👨‍🏫 Menu Guru / Admin (18)</span>
+                      {Object.values(adminFeatureMaintenance).filter(Boolean).length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[9px]">
+                          {Object.values(adminFeatureMaintenance).filter(Boolean).length} Maint
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFeatureRoleTab('member')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                        featureRoleTab === 'member'
+                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>🎓 Menu Siswa / Member (19)</span>
+                      {Object.values(memberFeatureMaintenance).filter(Boolean).length > 0 && (
+                        <span className="px-1.5 py-0.5 rounded-full bg-amber-400 text-black font-black text-[9px]">
+                          {Object.values(memberFeatureMaintenance).filter(Boolean).length} Maint
+                        </span>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setFeatureRoleTab('all')}
+                      className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-2 cursor-pointer ${
+                        featureRoleTab === 'all'
+                          ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                          : 'text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <span>📑 Semua Sub Kontrol</span>
+                    </button>
+                  </div>
+
+                  {/* Bulk Actions */}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleBulkToggle(featureRoleTab, true)}
+                      className="px-3 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                      title="Kunci semua fitur dalam role/sub-kontrol ini ke mode maintenance (nonaktif)"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>
+                        Kunci Semua ({featureRoleTab === 'global' ? 'Sistem' : featureRoleTab === 'admin' ? 'Admin' : featureRoleTab === 'member' ? 'Siswa' : 'Platform'})
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleBulkToggle(featureRoleTab, false)}
+                      className="px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
+                      title="Buka semua fitur dalam role/sub-kontrol ini ke mode normal (aktif)"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      <span>Buka Semua</span>
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-3">
+
+                {/* Filter & Search Toolbar */}
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+                  <div className="md:col-span-5 relative">
+                    <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={featureSearchQuery}
+                      onChange={(e) => setFeatureSearchQuery(e.target.value)}
+                      placeholder="Cari fitur (misal: website, ai, absensi, kuis, tugas, forum)..."
+                      className="w-full pl-10 pr-8 py-2.5 rounded-xl bg-[#0b081c] border border-[#261b47] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors"
+                    />
+                    {featureSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setFeatureSearchQuery('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white text-xs cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="md:col-span-7 flex flex-wrap items-center gap-1.5 overflow-x-auto scrollbar-none py-1">
+                    {[
+                      { id: 'all', label: 'Semua Kategori' },
+                      { id: 'utama', label: 'Menu Utama' },
+                      { id: 'akademik', label: 'Akademik' },
+                      { id: 'komunikasi', label: 'Komunikasi' },
+                      { id: 'hiburan', label: 'Hiburan & AI' },
+                      { id: 'lainnya', label: 'Utilitas' },
+                    ].map((cat) => (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => setFeatureCategoryFilter(cat.id as any)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer shrink-0 border ${
+                          featureCategoryFilter === cat.id
+                            ? 'bg-purple-600 text-white border-purple-500 shadow-sm'
+                            : 'bg-[#0e0a24] text-slate-400 hover:text-white border-[#241a45]'
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Stats Summary Bar */}
+                {(() => {
+                  let total = 0;
+                  let maintCount = 0;
+                  let labelTotal = 'TOTAL FITUR';
+                  let unit = 'Menu';
+
+                  if (featureRoleTab === 'global') {
+                    total = 2;
+                    maintCount = (maintenanceForm.isMaintenance ? 1 : 0) + (maintenanceForm.isAiMaintenance ? 1 : 0);
+                    labelTotal = 'TOTAL KONTROL SISTEM GLOBAL';
+                    unit = 'Kontrol';
+                  } else if (featureRoleTab === 'admin') {
+                    total = ADMIN_FEATURE_MENUS.length;
+                    maintCount = ADMIN_FEATURE_MENUS.filter((f) => Boolean(adminFeatureMaintenance[f.id])).length;
+                    labelTotal = 'TOTAL MENU GURU / ADMIN';
+                    unit = 'Menu';
+                  } else if (featureRoleTab === 'member') {
+                    total = MEMBER_FEATURE_MENUS.length;
+                    maintCount = MEMBER_FEATURE_MENUS.filter((f) => Boolean(memberFeatureMaintenance[f.id])).length;
+                    labelTotal = 'TOTAL MENU SISWA / MEMBER';
+                    unit = 'Menu';
+                  } else {
+                    const adminMaint = ADMIN_FEATURE_MENUS.filter((f) => Boolean(adminFeatureMaintenance[f.id])).length;
+                    const memberMaint = MEMBER_FEATURE_MENUS.filter((f) => Boolean(memberFeatureMaintenance[f.id])).length;
+                    const globalMaint = (maintenanceForm.isMaintenance ? 1 : 0) + (maintenanceForm.isAiMaintenance ? 1 : 0);
+                    total = 2 + ADMIN_FEATURE_MENUS.length + MEMBER_FEATURE_MENUS.length;
+                    maintCount = globalMaint + adminMaint + memberMaint;
+                    labelTotal = 'TOTAL SELURUH KONTROL PLATFORM';
+                    unit = 'Modul';
+                  }
+
+                  const onlineCount = total - maintCount;
+
+                  return (
+                    <div className="grid grid-cols-3 gap-3 p-3.5 rounded-2xl bg-[#0b071c] border border-[#231744] text-center shadow-inner">
+                      <div>
+                        <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">{labelTotal}</span>
+                        <span className="text-base font-black text-white">{total} {unit}</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">ONLINE / NORMAL (AKTIF)</span>
+                        <span className="text-base font-black text-emerald-300">{onlineCount} Aktif</span>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">SEDANG MAINTENANCE (NONAKTIF)</span>
+                        <span className="text-base font-black text-amber-300">{maintCount} Terkunci</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Sub-Kontrol Contents */}
+                {(() => {
+                  // Reusable feature card renderer
+                  const renderFeatureCard = (
+                    feature: FeatureMenuConfig,
+                    role: 'admin' | 'member'
+                  ) => {
+                    const isMaint = role === 'admin'
+                      ? Boolean(adminFeatureMaintenance[feature.id])
+                      : Boolean(memberFeatureMaintenance[feature.id]);
+                    const isFeatureActive = !isMaint;
+                    const customDetail = featureCustomMessages[`${role}_${feature.id}`];
+                    const hasCustom = Boolean(customDetail?.message || customDetail?.estimate);
+
+                    return (
+                      <div
+                        key={`${role}_${feature.id}`}
+                        className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-3.5 shadow-lg ${
+                          !isFeatureActive
+                            ? 'bg-[#18102b] border-amber-500/40 shadow-amber-950/20'
+                            : 'bg-[#100c26] border-[#251b47] hover:border-[#382b68]'
+                        }`}
+                      >
+                        <div className="space-y-2.5">
+                          {/* Top Bar: Category Pill & Status Badge */}
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/25 text-purple-300 text-[10px] font-bold">
+                              {feature.categoryLabel}
+                            </span>
+
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border flex items-center gap-1 ${
+                                !isFeatureActive
+                                  ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 animate-pulse'
+                                  : 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                              }`}
+                            >
+                              <span>{!isFeatureActive ? '🟡 Maint' : '🟢 Normal'}</span>
+                            </span>
+                          </div>
+
+                          {/* Title & Description */}
+                          <div>
+                            <h4 className="text-sm font-black text-white leading-tight">
+                              {feature.name}
+                            </h4>
+                            <span className="text-[10px] font-mono text-slate-500 block">
+                              id: {feature.id}
+                            </span>
+                            <p className="text-xs text-slate-400 mt-1 leading-relaxed line-clamp-2">
+                              {feature.description}
+                            </p>
+                          </div>
+
+                          {/* Custom Message preview note if configured */}
+                          {hasCustom && (
+                            <div className="p-2 rounded-xl bg-purple-950/30 border border-purple-500/20 text-[10px] text-purple-300">
+                              <span className="font-bold block">Pesan Kustom Aktif:</span>
+                              <span className="truncate block opacity-85">{customDetail?.message || feature.defaultMessage}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Actions: Toggle Switch & Config Button */}
+                        <div className="pt-2 border-t border-[#231945] flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenCustomMessageModal(role, feature)}
+                              className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                              title="Atur pesan kustom & estimasi waktu untuk fitur ini"
+                            >
+                              <Settings2 className="w-3.5 h-3.5 text-pink-400" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setPreviewFeatureData({
+                                  name: feature.name,
+                                  categoryLabel: feature.categoryLabel,
+                                  message: customDetail?.message || feature.defaultMessage,
+                                  estimate: customDetail?.estimate || feature.defaultEstimate,
+                                  role: role,
+                                })
+                              }
+                              className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                              title="Uji tampilan layar pemeliharaan fitur ini"
+                            >
+                              <Eye className="w-3.5 h-3.5 text-purple-400" />
+                            </button>
+                          </div>
+
+                          {/* Toggle Button: Touch geser kanan (Aktif: Hijau), geser kiri (Nonaktif: Default Abu-Abu) */}
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] font-bold ${isFeatureActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+                              {isFeatureActive ? 'Aktif' : 'Nonaktif'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                role === 'admin'
+                                  ? handleToggleAdminFeature(feature.id)
+                                  : handleToggleMemberFeature(feature.id)
+                              }
+                              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                                isFeatureActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
+                              }`}
+                              title={isFeatureActive ? 'Fitur aktif (klik untuk kunci ke maintenance)' : 'Fitur nonaktif (klik untuk aktifkan)'}
+                            >
+                              <span
+                                className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
+                                  isFeatureActive ? 'translate-x-6' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  };
+
+                  // Render 2 Global System Cards (Website & AI Assistant)
+                  const renderGlobalCards = () => {
+                    const isWebsiteActive = !maintenanceForm.isMaintenance;
+                    const isAiActive = !maintenanceForm.isAiMaintenance;
+
+                    const matchesSearch = (text: string) =>
+                      !featureSearchQuery.trim() ||
+                      text.toLowerCase().includes(featureSearchQuery.toLowerCase());
+
+                    const showWebsite =
+                      (featureCategoryFilter === 'all' || featureCategoryFilter === 'utama' || featureCategoryFilter === 'lainnya') &&
+                      (matchesSearch('Mode Pemeliharaan Website') || matchesSearch('website_global') || matchesSearch('server') || matchesSearch('pemeliharaan'));
+
+                    const showAi =
+                      (featureCategoryFilter === 'all' || featureCategoryFilter === 'hiburan' || featureCategoryFilter === 'lainnya') &&
+                      (matchesSearch('Status Fitur AI Assistant') || matchesSearch('ai_tutor') || matchesSearch('kecerdasan buatan') || matchesSearch('tutor'));
+
+                    if (!showWebsite && !showAi) {
+                      return (
+                        <div className="py-10 text-center rounded-2xl bg-[#0c081e] border border-[#241a45] space-y-2 col-span-full">
+                          <AlertTriangle className="w-7 h-7 text-slate-500 mx-auto" />
+                          <h4 className="text-sm font-bold text-white">Tidak ada kontrol sistem yang cocok</h4>
+                          <p className="text-xs text-slate-400">Coba ubah kata kunci pencarian atau reset filter kategori.</p>
+                        </div>
+                      );
+                    }
+
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* 1. Global Website Maintenance Card */}
+                        {showWebsite && (
+                          <div
+                            className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-3.5 shadow-lg ${
+                              !isWebsiteActive
+                                ? 'bg-[#18102b] border-amber-500/40 shadow-amber-950/20'
+                                : 'bg-[#100c26] border-[#251b47] hover:border-[#382b68]'
+                            }`}
+                          >
+                            <div className="space-y-2.5">
+                              {/* Top Bar: Category Pill & Status Badge */}
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="px-2 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/25 text-purple-300 text-[10px] font-bold">
+                                  Server &amp; Website Global
+                                </span>
+
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border flex items-center gap-1 ${
+                                    !isWebsiteActive
+                                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 animate-pulse'
+                                      : 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                                  }`}
+                                >
+                                  <span>{!isWebsiteActive ? '🟡 Maint' : '🟢 Normal'}</span>
+                                </span>
+                              </div>
+
+                              {/* Title & Description */}
+                              <div>
+                                <h4 className="text-sm font-black text-white leading-tight">
+                                  Mode Pemeliharaan Website
+                                </h4>
+                                <span className="text-[10px] font-mono text-slate-500 block">
+                                  id: website_global
+                                </span>
+                                <p className="text-xs text-slate-400 mt-1 leading-relaxed line-clamp-2">
+                                  Tampilan halaman pemeliharaan layar penuh saat situs diakses pengunjung, guru, dan siswa.
+                                </p>
+                              </div>
+
+                              {/* Custom Message preview note */}
+                              <div className="p-2.5 rounded-xl bg-purple-950/30 border border-purple-500/20 text-[10px] text-purple-300 space-y-0.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-white truncate max-w-[200px]">
+                                    {maintenanceForm.maintenanceTitle || 'Pemeliharaan Server & Pembaruan Sistem'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-pink-300">
+                                    {maintenanceForm.maintenanceEstimate || 'Segera selesai'}
+                                  </span>
+                                </div>
+                                <span className="truncate block opacity-85 text-slate-300">
+                                  {maintenanceForm.maintenanceMessage || 'Sedang dalam peningkatan sistem...'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Actions: Toggle Switch & Config Button */}
+                            <div className="pt-2 border-t border-[#231945] flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleOpenWebsiteConfig}
+                                  className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                                  title="Atur judul, pesan & estimasi waktu pemeliharaan website"
+                                >
+                                  <Settings2 className="w-3.5 h-3.5 text-pink-400" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowMaintenancePreviewModal(true)}
+                                  className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                                  title="Uji tampilan layar pemeliharaan website"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-purple-400" />
+                                </button>
+                              </div>
+
+                              {/* Toggle Button: Touch geser kanan (Aktif: Hijau), geser kiri (Nonaktif: Default Abu-Abu) */}
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-bold ${isWebsiteActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                  {isWebsiteActive ? 'Aktif' : 'Nonaktif'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleToggleWebsiteMaintenance}
+                                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                                    isWebsiteActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
+                                  }`}
+                                  title={isWebsiteActive ? 'Website aktif normal (klik untuk kunci ke maintenance)' : 'Website sedang maintenance (klik untuk aktifkan kembali)'}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
+                                      isWebsiteActive ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 2. AI Assistant Feature Mode Card */}
+                        {showAi && (
+                          <div
+                            className={`p-4 sm:p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-3.5 shadow-lg ${
+                              !isAiActive
+                                ? 'bg-[#18102b] border-amber-500/40 shadow-amber-950/20'
+                                : 'bg-[#100c26] border-[#251b47] hover:border-[#382b68]'
+                            }`}
+                          >
+                            <div className="space-y-2.5">
+                              {/* Top Bar: Category Pill & Status Badge */}
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="px-2 py-0.5 rounded-md bg-purple-500/10 border border-purple-500/25 text-purple-300 text-[10px] font-bold">
+                                  Kecerdasan Buatan (AI)
+                                </span>
+
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border flex items-center gap-1 ${
+                                    !isAiActive
+                                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-300 animate-pulse'
+                                      : 'bg-emerald-500/15 border-emerald-500/35 text-emerald-300'
+                                  }`}
+                                >
+                                  <span>{!isAiActive ? '🟡 Pengemb.' : '🟢 Normal'}</span>
+                                </span>
+                              </div>
+
+                              {/* Title & Description */}
+                              <div>
+                                <h4 className="text-sm font-black text-white leading-tight">
+                                  Status Fitur AI Assistant
+                                </h4>
+                                <span className="text-[10px] font-mono text-slate-500 block">
+                                  id: ai_tutor
+                                </span>
+                                <p className="text-xs text-slate-400 mt-1 leading-relaxed line-clamp-2">
+                                  Buka obrolan tutor cerdas atau kunci ke layar tahap pengembangan siswa.
+                                </p>
+                              </div>
+
+                              {/* Custom Message preview note */}
+                              <div className="p-2.5 rounded-xl bg-purple-950/30 border border-purple-500/20 text-[10px] text-purple-300 space-y-0.5">
+                                <div className="flex items-center justify-between">
+                                  <span className="font-bold text-white truncate max-w-[200px]">
+                                    {maintenanceForm.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!'}
+                                  </span>
+                                  <span className="text-[9px] font-mono text-amber-300">
+                                    Progress: {maintenanceForm.aiProgressPercent}%
+                                  </span>
+                                </div>
+                                <span className="truncate block opacity-85 text-slate-300">
+                                  {maintenanceForm.aiMaintenanceMessage || 'Sedang tahap pengembangan developer...'}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Actions: Toggle Switch & Config Button */}
+                            <div className="pt-2 border-t border-[#231945] flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleOpenAiConfig}
+                                  className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                                  title="Atur judul, pesan & progress persentase AI"
+                                >
+                                  <Settings2 className="w-3.5 h-3.5 text-pink-400" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAiPreviewModal(true)}
+                                  className="p-1.5 rounded-lg bg-[#191238] hover:bg-[#261c52] border border-[#312363] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+                                  title="Uji tampilan layar pemeliharaan AI Assistant"
+                                >
+                                  <Eye className="w-3.5 h-3.5 text-purple-400" />
+                                </button>
+                              </div>
+
+                              {/* Toggle Button: Touch geser kanan (Aktif: Hijau), geser kiri (Nonaktif: Default Abu-Abu) */}
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-bold ${isAiActive ? 'text-emerald-400' : 'text-slate-400'}`}>
+                                  {isAiActive ? 'Aktif' : 'Nonaktif'}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleToggleAiMaintenance}
+                                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                                    isAiActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
+                                  }`}
+                                  title={isAiActive ? 'AI Assistant aktif normal (klik untuk kunci ke pengembangan)' : 'AI sedang nonaktif (klik untuk aktifkan)'}
+                                >
+                                  <span
+                                    className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
+                                      isAiActive ? 'translate-x-6' : 'translate-x-1'
+                                    }`}
+                                  />
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  };
+
+                  const filterList = (list: FeatureMenuConfig[]) =>
+                    list.filter((f) => {
+                      const matchesSearch =
+                        !featureSearchQuery.trim() ||
+                        f.name.toLowerCase().includes(featureSearchQuery.toLowerCase()) ||
+                        f.description.toLowerCase().includes(featureSearchQuery.toLowerCase()) ||
+                        f.id.toLowerCase().includes(featureSearchQuery.toLowerCase());
+                      const matchesCat = featureCategoryFilter === 'all' || f.category === featureCategoryFilter;
+                      return matchesSearch && matchesCat;
+                    });
+
+                  // Mode 1: Sub-Kontrol Global (2 Kolom Website & AI)
+                  if (featureRoleTab === 'global') {
+                    return renderGlobalCards();
+                  }
+
+                  // Mode 2: Sub-Kontrol Admin (18 Menu)
+                  if (featureRoleTab === 'admin') {
+                    const filteredAdmin = filterList(ADMIN_FEATURE_MENUS);
+                    if (filteredAdmin.length === 0) {
+                      return (
+                        <div className="py-12 text-center rounded-2xl bg-[#0c081e] border border-[#241a45] space-y-2">
+                          <AlertTriangle className="w-8 h-8 text-slate-500 mx-auto" />
+                          <h4 className="text-sm font-bold text-white">Tidak ada fitur Admin yang cocok</h4>
+                          <p className="text-xs text-slate-400">Coba ubah kata kunci pencarian atau ganti filter kategori.</p>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {filteredAdmin.map((feature) => renderFeatureCard(feature, 'admin'))}
+                      </div>
+                    );
+                  }
+
+                  // Mode 3: Sub-Kontrol Member / Siswa (19 Menu)
+                  if (featureRoleTab === 'member') {
+                    const filteredMember = filterList(MEMBER_FEATURE_MENUS);
+                    if (filteredMember.length === 0) {
+                      return (
+                        <div className="py-12 text-center rounded-2xl bg-[#0c081e] border border-[#241a45] space-y-2">
+                          <AlertTriangle className="w-8 h-8 text-slate-500 mx-auto" />
+                          <h4 className="text-sm font-bold text-white">Tidak ada fitur Siswa yang cocok</h4>
+                          <p className="text-xs text-slate-400">Coba ubah kata kunci pencarian atau ganti filter kategori.</p>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                        {filteredMember.map((feature) => renderFeatureCard(feature, 'member'))}
+                      </div>
+                    );
+                  }
+
+                  // Mode 4: Tampilkan Semua Sub Kontrol (Global, Admin, Siswa)
+                  const filteredAdmin = filterList(ADMIN_FEATURE_MENUS);
+                  const filteredMember = filterList(MEMBER_FEATURE_MENUS);
+
+                  return (
+                    <div className="space-y-8">
+                      {/* Section 1: Sub Kontrol Sistem Global */}
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2 pb-2 border-b border-[#251b47]">
+                          <Globe className="w-4 h-4 text-purple-400" />
+                          <h4 className="text-sm font-black text-white">1. Sub Kontrol: Sistem &amp; Website Utama (2 Kolom)</h4>
+                        </div>
+                        {renderGlobalCards()}
+                      </div>
+
+                      {/* Section 2: Sub Kontrol Menu Admin */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between pb-2 border-b border-[#251b47]">
+                          <div className="flex items-center gap-2">
+                            <Shield className="w-4 h-4 text-pink-400" />
+                            <h4 className="text-sm font-black text-white">2. Sub Kontrol: Menu Guru &amp; Admin ({filteredAdmin.length})</h4>
+                          </div>
+                        </div>
+                        {filteredAdmin.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic">Tidak ada fitur admin yang sesuai filter.</p>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {filteredAdmin.map((feature) => renderFeatureCard(feature, 'admin'))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Section 3: Sub Kontrol Menu Siswa */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between pb-2 border-b border-[#251b47]">
+                          <div className="flex items-center gap-2">
+                            <Users className="w-4 h-4 text-emerald-400" />
+                            <h4 className="text-sm font-black text-white">3. Sub Kontrol: Menu Siswa &amp; Member ({filteredMember.length})</h4>
+                          </div>
+                        </div>
+                        {filteredMember.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic">Tidak ada fitur siswa yang sesuai filter.</p>
+                        ) : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {filteredMember.map((feature) => renderFeatureCard(feature, 'member'))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Bottom Quick Save Sticky Banner */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-[#1f1545] to-[#150f2e] border border-pink-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl">
+                  <div className="flex items-center gap-2.5">
+                    <Sparkles className="w-4 h-4 text-pink-400 shrink-0" />
+                    <span className="text-xs text-slate-300">
+                      Perubahan kontrol maintenance tersimpan secara instan di lokal dan tersinkronisasi via Supabase Realtime saat Anda menekan tombol simpan.
+                    </span>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setShowMaintenancePreviewModal(true)}
-                    className="px-4 py-2.5 rounded-xl bg-[#20183b] hover:bg-[#2c2250] text-pink-300 border border-pink-500/30 text-xs font-bold flex items-center gap-2 cursor-pointer transition-colors"
+                    disabled={isSavingFeatures}
+                    onClick={handleSaveFeatureSettings}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 disabled:opacity-50 text-white font-bold text-xs shrink-0 cursor-pointer shadow-lg shadow-pink-500/25 active:scale-95 transition-all flex items-center justify-center gap-2"
                   >
-                    <Eye className="w-4 h-4" />
-                    <span>Pratinjau Layar Maintenance</span>
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>{isSavingFeatures ? 'Menyimpan...' : 'Terapkan Pengaturan Fitur'}</span>
                   </button>
                 </div>
               </div>
@@ -3389,6 +4174,189 @@ export const OwnerPanel: React.FC = () => {
         </div>
       )}
 
+      {/* SQL Feature Maintenance Schema Modal */}
+      {showSqlFeatureModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-3xl bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4 max-h-[90vh] flex flex-col">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e] shrink-0">
+              <div className="flex items-center gap-2.5 text-white">
+                <FileCode className="w-5 h-5 text-purple-400" />
+                <div>
+                  <h3 className="font-extrabold text-base">Skrip SQL Supabase — Kontrol Maintenance Fitur</h3>
+                  <p className="text-[11px] text-slate-400">Kontrol granular per menu fitur untuk POV Guru/Admin dan Siswa/Member</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSqlFeatureModal(false)}
+                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed shrink-0">
+              Jalankan query SQL ini di <strong>Supabase Dashboard → SQL Editor</strong> untuk menambahkan kolom kontrol fitur <code>admin_feature_maintenance</code>, <code>member_feature_maintenance</code>, dan <code>feature_maintenance_custom_messages</code> pada tabel <code>system_settings</code> serta mengaktifkan sinkronisasi <strong>Supabase Realtime</strong> ke seluruh perangkat admin dan siswa secara instan.
+            </p>
+
+            <div className="relative flex-1 overflow-hidden rounded-2xl border border-[#2a1d48] bg-[#0a0714]">
+              <pre className="p-4 text-[11px] font-mono text-purple-300 overflow-y-auto max-h-[380px] custom-scrollbar whitespace-pre">
+                {FEATURE_MAINTENANCE_SQL}
+              </pre>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-2 shrink-0 border-t border-[#231742]">
+              <div className="text-[11px] text-slate-400">
+                <span>Status: </span>
+                <span className="text-emerald-400 font-bold">Siap dijalankan di SQL Editor</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSqlFeatureModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Tutup
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCopySqlFeature}
+                  className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 via-pink-600 to-indigo-600 hover:opacity-90 text-xs font-bold text-white flex items-center gap-2 shadow-lg shadow-purple-500/25 cursor-pointer active:scale-95 transition-all"
+                >
+                  {copiedSqlFeature ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
+                  <span>{copiedSqlFeature ? 'Tersalin ke Clipboard!' : 'Salin Skrip SQL'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Custom Feature Maintenance Message Modal */}
+      {editingCustomFeature && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e]">
+              <div className="flex items-center gap-2.5 text-white">
+                <Settings2 className="w-5 h-5 text-pink-400" />
+                <div>
+                  <h3 className="font-extrabold text-base">Atur Pesan Kustom Fitur</h3>
+                  <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider">
+                    {editingCustomFeature.role === 'admin' ? 'POV Guru / Admin' : 'POV Siswa / Member'} • {editingCustomFeature.name}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingCustomFeature(null)}
+                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tentukan pesan khusus dan estimasi penyelesaian saat pengguna membuka fitur <strong>{editingCustomFeature.name}</strong> yang sedang berstatus pemeliharaan.
+            </p>
+
+            <div className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Pesan Pemeliharaan (Maintenance Message)
+                </label>
+                <textarea
+                  rows={3}
+                  value={customFeatureMessageInput}
+                  onChange={(e) => setCustomFeatureMessageInput(e.target.value)}
+                  placeholder={editingCustomFeature.defaultMessage}
+                  className="w-full p-3 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors"
+                />
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  Default: {editingCustomFeature.defaultMessage}
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Estimasi Waktu Penyelesaian
+                </label>
+                <input
+                  type="text"
+                  value={customFeatureEstimateInput}
+                  onChange={(e) => setCustomFeatureEstimateInput(e.target.value)}
+                  placeholder={editingCustomFeature.defaultEstimate}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors"
+                />
+                <span className="text-[10px] text-slate-500 block mt-1">
+                  Contoh: &quot;Estimasi 20 Menit&quot;, &quot;Pukul 14:00 WIB&quot;, atau &quot;Segera kembali&quot;
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-[#231742]">
+              <button
+                type="button"
+                onClick={handleResetCustomFeatureMessage}
+                className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold cursor-pointer transition-all active:scale-95"
+              >
+                Reset ke Default
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingCustomFeature(null)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCustomFeatureMessage}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 text-xs font-bold text-white shadow-md shadow-pink-500/20 cursor-pointer active:scale-95 transition-all"
+                >
+                  Terapkan Pesan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Feature Maintenance Live Preview Modal */}
+      {previewFeatureData && (
+        <div className="fixed inset-0 z-[99999] bg-black/90 flex flex-col items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-3xl flex items-center justify-between mb-4 px-2">
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 rounded-full bg-pink-500/20 border border-pink-500/40 text-pink-300 font-bold text-xs">
+                Simulasi Pratinjau Tampilan • {previewFeatureData.role === 'admin' ? 'Guru / Admin' : 'Siswa / Member'}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewFeatureData(null)}
+              className="px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center gap-2 shadow-2xl cursor-pointer active:scale-95 transition-all"
+            >
+              <X className="w-4 h-4" />
+              <span>Tutup Pratinjau</span>
+            </button>
+          </div>
+
+          <div className="w-full max-w-2xl">
+            <FeatureMaintenanceView
+              featureName={previewFeatureData.name}
+              categoryLabel={previewFeatureData.categoryLabel}
+              customMessage={previewFeatureData.message}
+              customEstimate={previewFeatureData.estimate}
+              onBackToDashboard={() => {
+                showToast('Simulasi tombol "Kembali ke Beranda" ditekan.', 'info');
+                setPreviewFeatureData(null);
+              }}
+              role={previewFeatureData.role}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Broadcast Modal */}
       <BroadcastModal
         isOpen={isBroadcastModalOpen}
@@ -3416,6 +4384,284 @@ export const OwnerPanel: React.FC = () => {
               setShowMaintenancePreviewModal(false);
             }}
           />
+        </div>
+      )}
+
+      {/* Website Maintenance Configuration Modal */}
+      {showWebsiteConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e]">
+              <div className="flex items-center gap-2.5 text-white">
+                <Settings2 className="w-5 h-5 text-pink-400" />
+                <div>
+                  <h3 className="font-extrabold text-base">Atur Pemeliharaan Website</h3>
+                  <span className="text-[11px] font-bold text-purple-400 uppercase tracking-wider">
+                    Server &amp; Website Global (Seluruh Pengguna)
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowWebsiteConfigModal(false)}
+                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Atur judul, pesan pengumuman, dan estimasi waktu yang muncul di layar penuh saat website berada dalam status pemeliharaan.
+            </p>
+
+            <div className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Judul Layar Pemeliharaan
+                </label>
+                <input
+                  type="text"
+                  value={websiteConfigTitle}
+                  onChange={(e) => setWebsiteConfigTitle(e.target.value)}
+                  placeholder="Contoh: Pemeliharaan Server & Pembaruan Sistem"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Pesan Deskripsi untuk Pengguna
+                </label>
+                <textarea
+                  rows={3}
+                  value={websiteConfigMessage}
+                  onChange={(e) => setWebsiteConfigMessage(e.target.value)}
+                  placeholder="Ketikkan pesan pemeliharaan untuk pengguna..."
+                  className="w-full p-3 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors resize-none leading-relaxed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Estimasi Waktu Pengerjaan
+                </label>
+                <input
+                  type="text"
+                  value={websiteConfigEstimate}
+                  onChange={(e) => setWebsiteConfigEstimate(e.target.value)}
+                  placeholder="Contoh: Segera selesai dalam beberapa saat / Estimasi 30 Menit"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-pink-500 transition-colors"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-[#231742]">
+              <button
+                type="button"
+                onClick={() => {
+                  setWebsiteConfigTitle('Pemeliharaan Server & Pembaruan Sistem');
+                  setWebsiteConfigMessage('Kami sedang melakukan peningkatan infrastruktur dan optimalisasi database Supabase untuk menghadirkan performa terbaik. Mohon bersabar, kami akan segera kembali.');
+                  setWebsiteConfigEstimate('Segera selesai dalam beberapa saat');
+                  showToast('Form dikembalikan ke pesan default.', 'info');
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold cursor-pointer transition-all active:scale-95"
+              >
+                Reset Default
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowWebsiteConfigModal(false)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveWebsiteConfig}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 text-xs font-bold text-white shadow-md shadow-pink-500/20 cursor-pointer active:scale-95 transition-all"
+                >
+                  Terapkan &amp; Simpan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Assistant Configuration Modal */}
+      {showAiConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-lg bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#2e234e]">
+              <div className="flex items-center gap-2.5 text-white">
+                <Settings2 className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="font-extrabold text-base">Konfigurasi Mode AI Assistant</h3>
+                  <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider">
+                    Asisten AI &amp; Tutor Belajar
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAiConfigModal(false)}
+                className="p-1.5 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Atur judul status, pengumuman pengembangan, dan persentase kesiapan yang ditampilkan saat fitur AI Assistant dikunci ke mode pengembangan.
+            </p>
+
+            <div className="space-y-3.5">
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Judul Status AI
+                </label>
+                <input
+                  type="text"
+                  value={aiConfigTitle}
+                  onChange={(e) => setAiConfigTitle(e.target.value)}
+                  placeholder="Contoh: AI Assistant Sedang Bersiap!"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-amber-500 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                  Pesan Deskripsi Mode Pengembangan
+                </label>
+                <textarea
+                  rows={3}
+                  value={aiConfigMessage}
+                  onChange={(e) => setAiConfigMessage(e.target.value)}
+                  placeholder="Ketikkan pesan pengembangan AI..."
+                  className="w-full p-3 rounded-xl bg-[#0b081c] border border-[#2a1e4e] text-xs text-white placeholder-slate-500 outline-none focus:border-amber-500 transition-colors resize-none leading-relaxed"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold text-slate-300">
+                    Progress Indikator Pengembangan (%)
+                  </label>
+                  <span className="text-xs font-mono font-bold text-amber-400">
+                    {aiConfigProgress}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={aiConfigProgress}
+                  onChange={(e) => setAiConfigProgress(Number(e.target.value))}
+                  className="w-full accent-amber-400 cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-3 border-t border-[#231742]">
+              <button
+                type="button"
+                onClick={() => {
+                  setAiConfigTitle('AI Assistant Sedang Bersiap!');
+                  setAiConfigMessage('Fitur AI Assistant sedang dalam tahap pengembangan developer, mohon ditunggu ya! Kami sedang mematangkan asisten bimbingan belajar cerdas terbaik untuk Anda.');
+                  setAiConfigProgress(85);
+                  showToast('Form dikembalikan ke default AI.', 'info');
+                }}
+                className="px-3.5 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold cursor-pointer transition-all active:scale-95"
+              >
+                Reset Default
+              </button>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAiConfigModal(false)}
+                  className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs text-slate-300 hover:text-white cursor-pointer"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAiConfig}
+                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-500 to-purple-600 hover:opacity-90 text-xs font-bold text-white shadow-md shadow-amber-500/20 cursor-pointer active:scale-95 transition-all"
+                >
+                  Terapkan &amp; Simpan
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI Assistant Maintenance Preview Modal */}
+      {showAiPreviewModal && (
+        <div className="fixed inset-0 z-[99999] bg-black/90 flex flex-col items-center justify-center p-4 backdrop-blur-md overflow-y-auto">
+          <div className="w-full max-w-2xl flex items-center justify-between mb-4 px-2">
+            <div className="flex items-center gap-2">
+              <span className="px-3 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 font-bold text-xs">
+                Simulasi Pratinjau • Layar AI Assistant (Tahap Pengembangan)
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAiPreviewModal(false)}
+              className="px-4 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs flex items-center gap-2 shadow-2xl cursor-pointer active:scale-95 transition-all"
+            >
+              <X className="w-4 h-4" />
+              <span>Tutup Pratinjau</span>
+            </button>
+          </div>
+
+          <div className="w-full max-w-2xl bg-[#141126] border border-[#3b2d61] rounded-3xl p-8 sm:p-10 shadow-2xl text-center space-y-6 relative overflow-hidden">
+            <div className="relative inline-block mb-2">
+              <div className="w-24 h-24 mx-auto rounded-3xl bg-[#1e173b] border border-amber-500/40 shadow-xl flex items-center justify-center text-amber-400">
+                <Bot className="w-12 h-12 animate-bounce duration-1000" />
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400 text-xs font-bold uppercase tracking-wider">
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Tahap Pengembangan Developer</span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-black text-white">
+                {maintenanceForm.aiMaintenanceTitle || 'AI Assistant Sedang Bersiap!'}
+              </h2>
+              <p className="text-sm text-slate-300 max-w-md mx-auto leading-relaxed">
+                {maintenanceForm.aiMaintenanceMessage || 'Fitur AI Assistant sedang dalam tahap pengembangan developer...'}
+              </p>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="max-w-md mx-auto space-y-2">
+              <div className="flex items-center justify-between text-xs font-semibold">
+                <span className="text-slate-400">Tingkat Kesiapan Fitur</span>
+                <span className="text-amber-400 font-mono font-bold">{maintenanceForm.aiProgressPercent}%</span>
+              </div>
+              <div className="w-full h-3 bg-[#0c0919] rounded-full overflow-hidden p-0.5 border border-[#2b224d]">
+                <div
+                  className="h-full bg-gradient-to-r from-amber-500 to-pink-500 rounded-full transition-all duration-500"
+                  style={{ width: `${maintenanceForm.aiProgressPercent}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowAiPreviewModal(false)}
+                className="px-6 py-2.5 rounded-xl bg-white/10 hover:bg-white/20 text-white font-bold text-xs cursor-pointer transition-all"
+              >
+                Tutup Simulasi
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
