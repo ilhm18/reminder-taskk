@@ -71,6 +71,18 @@ export const QuestionBankMemberView: React.FC = () => {
     }
   }, [activeDbLiveQuiz, joinedLiveQuizId]);
 
+  // Auto-rejoin if active live quiz is running and student was already in lobby/responses
+  useEffect(() => {
+    if (activeDbLiveQuiz && !joinedLiveQuizId) {
+      const hasJoinedInDb = liveQuizResponses.some(
+        (r) => r.liveQuizId === activeDbLiveQuiz.id && r.memberId === currentUser?.id
+      );
+      if (hasJoinedInDb) {
+        setJoinedLiveQuizId(activeDbLiveQuiz.id);
+      }
+    }
+  }, [activeDbLiveQuiz, joinedLiveQuizId, liveQuizResponses, currentUser]);
+
   // Live countdown timer logic matching Kahoot!
   useEffect(() => {
     if (!activeDbLiveQuiz?.activeQuestionEndsAt || activeDbLiveQuiz.status !== 'active') {
@@ -394,7 +406,7 @@ export const QuestionBankMemberView: React.FC = () => {
                       className={`h-full transition-all duration-1000 ease-linear rounded-full ${
                         liveSecondsLeft <= 5 ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-r from-pink-500 to-purple-500'
                       }`}
-                      style={{ width: `${Math.max(0, Math.min(100, (liveSecondsLeft / 30) * 100))}%` }}
+                      style={{ width: `${Math.max(0, Math.min(100, (liveSecondsLeft / (liveQuizData.timeLimitPerQuestionSeconds || 30)) * 100))}%` }}
                     />
                   </div>
                 </div>
@@ -413,25 +425,29 @@ export const QuestionBankMemberView: React.FC = () => {
               {/* KAHOOT STYLE SHOW ANSWERS (CORRECT / INCORRECT RESULTS FLASHCARD) */}
               {activeDbLiveQuiz.showAnswers ? (
                 <div className={`p-8 rounded-3xl text-center space-y-6 border shadow-2xl animate-in zoom-in duration-300 ${
-                  myResp?.isCorrect
+                  !myResp
+                    ? 'bg-gradient-to-br from-amber-600 via-yellow-700 to-amber-950 border-amber-400 text-white'
+                    : myResp.isCorrect
                     ? 'bg-gradient-to-br from-emerald-600 via-teal-700 to-emerald-950 border-emerald-400 text-white'
                     : 'bg-gradient-to-br from-red-600 via-rose-700 to-red-950 border-red-400 text-white'
                 }`}>
                   <div className="space-y-4">
                     <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl mx-auto shadow-lg animate-bounce ${
-                      myResp?.isCorrect ? 'bg-emerald-500/35 border-2 border-emerald-300' : 'bg-red-500/35 border-2 border-red-300'
+                      !myResp ? 'bg-amber-500/35 border-2 border-amber-300' : myResp.isCorrect ? 'bg-emerald-500/35 border-2 border-emerald-300' : 'bg-red-500/35 border-2 border-red-300'
                     }`}>
-                      {myResp?.isCorrect ? '✓' : '✗'}
+                      {!myResp ? '⏰' : myResp.isCorrect ? '✓' : '✗'}
                     </div>
 
                     <div className="space-y-1">
                       <h2 className="text-2xl sm:text-3xl font-black tracking-tight uppercase">
-                        {myResp?.isCorrect ? 'Jawaban Anda Benar! 🎉' : 'Jawaban Anda Salah! 😢'}
+                        {!myResp ? 'Waktu Habis! ⏰' : myResp.isCorrect ? 'Jawaban Anda Benar! 🎉' : 'Jawaban Anda Salah! 😢'}
                       </h2>
                       <p className="text-xs text-white/80 max-w-md mx-auto">
-                        {myResp?.isCorrect
-                          ? `Hebat! Anda berhasil menjawab soal ini dengan cepat dan meraih poin.`
-                          : `Jangan berkecil hati, mari pelajari jawaban yang benar dan coba lagi di soal berikutnya.`}
+                        {!myResp
+                          ? 'Waktu pengerjaan soal ini telah habis sebelum Anda sempat mengirimkan jawaban.'
+                          : myResp.isCorrect
+                          ? 'Hebat! Anda berhasil menjawab soal ini dengan cepat dan meraih poin.'
+                          : 'Jangan berkecil hati, mari pelajari jawaban yang benar dan coba lagi di soal berikutnya.'}
                       </p>
                     </div>
 

@@ -1500,7 +1500,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
             questionId: q.id,
             type: q.type,
             selectedOptionIndex: matched?.selectedOptionIndex,
-            essayAnswerText: '',
+            essayAnswerText: matched?.essayAnswer || '',
             isCorrect: matched?.isCorrect,
             pointsEarned: matched?.pointsEarned || 0,
           };

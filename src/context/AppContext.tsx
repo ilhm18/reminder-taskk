@@ -1323,6 +1323,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             memberId: lqr.member_id,
             memberName: lqr.member_name,
             selectedOptionIndex: lqr.selected_option_index !== null ? Number(lqr.selected_option_index) : undefined,
+            essayAnswer: lqr.essay_answer || undefined,
             isCorrect: lqr.is_correct || false,
             pointsEarned: lqr.points_earned || 0,
             responseTimeMs: lqr.response_time_ms || 0,
@@ -2349,7 +2350,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       clearInterval(oneDayInterval);
       client.removeChannel(channel);
     };
-  }, []);
+  }, [isSupabaseConnected]);
 
   const currentRole: UserRole = currentUser?.role || 'member';
 
@@ -4997,6 +4998,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           ans.isCorrect = false;
           ans.pointsEarned = 0;
+        }
+      } else if (ans.type === 'essay') {
+        const question = quiz?.questions.find((q) => q.id === ans.questionId);
+        // If already evaluated (from Live Quiz completion)
+        if (ans.isCorrect !== undefined && ans.pointsEarned !== undefined) {
+          if (ans.isCorrect) {
+            totalScore += ans.pointsEarned;
+          }
+        } else if (question) {
+          // Auto-grade standard exam essay based on keywords
+          const cleanAnswer = (ans.essayAnswerText || '').trim().toLowerCase();
+          const cleanKey = (question.essayAnswerKey || '').trim().toLowerCase();
+          let isCorrect = false;
+          if (cleanKey) {
+            const keywords = cleanKey.split(',').map(k => k.trim()).filter(Boolean);
+            if (keywords.length > 0) {
+              isCorrect = keywords.some(kw => cleanAnswer.includes(kw));
+            } else {
+              isCorrect = cleanAnswer.includes(cleanKey);
+            }
+          } else {
+            isCorrect = cleanAnswer.length > 0;
+          }
+          ans.isCorrect = isCorrect;
+          ans.pointsEarned = isCorrect ? question.points : 0;
+          if (isCorrect) {
+            totalScore += question.points;
+          }
         }
       }
     });

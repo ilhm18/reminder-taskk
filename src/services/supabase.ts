@@ -608,6 +608,11 @@ CREATE TABLE IF NOT EXISTS public.live_quiz_responses (
 -- Kolom opsional jika tabel sudah ada sebelumnya
 ALTER TABLE IF EXISTS public.live_quiz_responses ADD COLUMN IF NOT EXISTS essay_answer TEXT;
 
+-- Hapus duplikat dan pastikan unique constraint pada live_quiz_responses ada untuk mendukung upsert
+DELETE FROM public.live_quiz_responses a USING public.live_quiz_responses b WHERE a.id < b.id AND a.live_quiz_id = b.live_quiz_id AND a.member_id = b.member_id AND a.question_index = b.question_index;
+ALTER TABLE public.live_quiz_responses DROP CONSTRAINT IF EXISTS uq_live_quiz_member_question;
+ALTER TABLE public.live_quiz_responses ADD CONSTRAINT uq_live_quiz_member_question UNIQUE (live_quiz_id, member_id, question_index);
+
 CREATE INDEX IF NOT EXISTS idx_live_quiz_responses_quiz ON public.live_quiz_responses(live_quiz_id);
 
 -- ====================================================
