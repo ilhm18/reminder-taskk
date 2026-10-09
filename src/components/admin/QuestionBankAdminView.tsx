@@ -28,7 +28,7 @@ import { QuestionBankItem, QuestionItem, QuestionType, QuizStatus, QuizSubmissio
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { playNotificationSound } from '../../utils/notification';
 
-export const QuestionBankAdminView: React.FC = () => {
+export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }> = ({ initialMode = 'normal' }) => {
   const {
     currentClass,
     questionBanks,
@@ -45,20 +45,30 @@ export const QuestionBankAdminView: React.FC = () => {
     updateLiveQuizStatus,
     nextLiveQuizQuestion,
     deleteLiveQuiz,
+    setLiveQuizShowAnswers,
+    setLiveQuizTimer,
   } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
 
-  // Filter question banks for current class (robust fallback so items are never hidden by mismatched IDs)
+  // Filter question banks for current class and type (soal/ujian vs kuis_live)
   const targetClassId = currentClass?.id || currentUser?.classId || '';
   const classQuestionBanks = questionBanks.filter((qb) => {
-    if (!targetClassId) return true;
-    return (
+    // 1. Class ID check
+    const isSameClass = !targetClassId ||
       qb.classId === targetClassId ||
       (currentClass?.code && qb.classId === currentClass.code) ||
-      !qb.classId
-    );
+      !qb.classId;
+
+    if (!isSameClass) return false;
+
+    // 2. Quiz type division check
+    if (initialMode === 'live') {
+      return qb.quizType === 'kuis_live';
+    } else {
+      return qb.quizType === 'bank_soal' || !qb.quizType;
+    }
   });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -281,6 +291,7 @@ export const QuestionBankAdminView: React.FC = () => {
         questions: formQuestions,
         totalQuestions,
         totalPoints,
+        quizType: editingQuiz.quizType || (initialMode === 'live' ? 'kuis_live' : 'bank_soal'),
       });
     } else {
       const effectiveClassId = currentClass?.id || currentUser?.classId || 'class-default';
@@ -297,6 +308,7 @@ export const QuestionBankAdminView: React.FC = () => {
         totalPoints,
         createdBy: currentUser?.id || 'admin',
         createdByName: currentUser?.name || 'Admin Kelas',
+        quizType: initialMode === 'live' ? 'kuis_live' : 'bank_soal',
       });
     }
 
@@ -337,73 +349,92 @@ export const QuestionBankAdminView: React.FC = () => {
       <div className="relative overflow-hidden rounded-3xl bg-gradient-to-r from-[#1c153d] via-[#161131] to-[#0f0c22] border border-[#2e2354] p-6 sm:p-8 shadow-2xl">
         <div className="absolute -right-10 -top-10 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
-          <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-xs font-bold mb-3">
-              <HelpCircle className="w-3.5 h-3.5 text-pink-400" />
-              <span>Sistem Bank Soal &amp; Ujian Terintegrasi</span>
+          {initialMode === 'live' ? (
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-xs font-bold mb-3">
+                <Sparkles className="w-3.5 h-3.5 text-pink-400" />
+                <span>Kuis Interaktif Real-Time (RemindQuiz Live)</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                RemindQuiz Live 🎙️
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
+                Pilih salah satu paket bank soal di bawah ini untuk meluncurkan sesi kuis live interaktif bergaya Kahoot dengan {terms.memberTitlePlural.toLowerCase()} Anda secara realtime!
+              </p>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              Bank Soal &amp; Manajemen Ujian
-            </h1>
-            <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
-              Buat paket soal pilihan ganda &amp; essay secara manual. Anda dapat menyimpan soal di{' '}
-              <strong className="text-amber-400">Persembunyian (Rahasia)</strong> sehingga {terms.memberTitle.toLowerCase()} kelas tidak mengetahuinya sampai Anda membukanya!
-            </p>
-          </div>
+          ) : (
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-xs font-bold mb-3">
+                <HelpCircle className="w-3.5 h-3.5 text-pink-400" />
+                <span>Sistem Bank Soal &amp; Ujian Terintegrasi</span>
+              </div>
+              <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+                Bank Soal &amp; Manajemen Ujian
+              </h1>
+              <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
+                Buat paket soal pilihan ganda &amp; essay secara manual. Anda dapat menyimpan soal di{' '}
+                <strong className="text-amber-400">Persembunyian (Rahasia)</strong> sehingga {terms.memberTitle.toLowerCase()} kelas tidak mengetahuinya sampai Anda membukanya!
+              </p>
+            </div>
+          )}
 
-          <button
-            type="button"
-            onClick={handleOpenCreateModal}
-            className="px-5 py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white font-black text-xs shadow-lg shadow-pink-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0 active:scale-95"
-          >
-            <Plus className="w-4 h-4 stroke-[3]" />
-            <span>Buat Paket Soal Baru</span>
-          </button>
+          {initialMode !== 'live' && (
+            <button
+              type="button"
+              onClick={handleOpenCreateModal}
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-600 hover:to-purple-700 text-white font-black text-xs shadow-lg shadow-pink-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0 active:scale-95"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+              <span>Buat Paket Soal Baru</span>
+            </button>
+          )}
         </div>
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
-          <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
-            <BookOpen className="w-5 h-5" />
+      {initialMode !== 'live' && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+          <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-purple-500/20 text-purple-400 flex items-center justify-center shrink-0">
+              <BookOpen className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">TOTAL PAKET</span>
+              <span className="text-xl font-black text-white">{totalCount} Paket</span>
+            </div>
           </div>
-          <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">TOTAL PAKET</span>
-            <span className="text-xl font-black text-white">{totalCount} Paket</span>
-          </div>
-        </div>
 
-        <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
-          <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
-            <Eye className="w-5 h-5" />
+          <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
+              <Eye className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">TERBUKA (PUBLIK)</span>
+              <span className="text-xl font-black text-white">{publishedCount} Paket</span>
+            </div>
           </div>
-          <div>
-            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">TERBUKA (PUBLIK)</span>
-            <span className="text-xl font-black text-white">{publishedCount} Paket</span>
-          </div>
-        </div>
 
-        <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
-            <Lock className="w-5 h-5" />
+          <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0">
+              <Lock className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">DI PERSEMBUNYIAN</span>
+              <span className="text-xl font-black text-white">{hiddenCount} Paket</span>
+            </div>
           </div>
-          <div>
-            <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">DI PERSEMBUNYIAN</span>
-            <span className="text-xl font-black text-white">{hiddenCount} Paket</span>
-          </div>
-        </div>
 
-        <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
-          <div className="w-10 h-10 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
-            <FileText className="w-5 h-5" />
-          </div>
-          <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">TOTAL BUTIR SOAL</span>
-            <span className="text-xl font-black text-white">{totalQuestionsAll} Soal</span>
+          <div className="p-4 rounded-2xl bg-[#141029] border border-[#271f49] flex items-center gap-3.5 shadow-lg">
+            <div className="w-10 h-10 rounded-xl bg-pink-500/20 text-pink-400 flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5" />
+            </div>
+            <div>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">TOTAL BUTIR SOAL</span>
+              <span className="text-xl font-black text-white">{totalQuestionsAll} Soal</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Filter and Search Bar */}
       <div className="p-4 rounded-2xl bg-[#14102b] border border-[#271e4d] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
@@ -571,40 +602,42 @@ export const QuestionBankAdminView: React.FC = () => {
 
                 {/* Card Actions */}
                 <div className="space-y-2 pt-2 border-t border-[#261d47]">
-                  {/* Live Quiz Launcher */}
-                  <button
-                    type="button"
-                    onClick={() => handleStartLiveQuiz(quiz)}
-                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/20 active:scale-95"
-                  >
-                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse stroke-[2.5]" />
-                    <span>Mulai Kuis Live (RemindQuiz Live) 🎙️</span>
-                  </button>
+                  {initialMode === 'live' ? (
+                    /* Live Quiz Launcher */
+                    <button
+                      type="button"
+                      onClick={() => handleStartLiveQuiz(quiz)}
+                      className="w-full py-3 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/20 active:scale-95 mb-1"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse stroke-[2.5]" />
+                      <span>Mulai Kuis Live (RemindQuiz Live) 🎙️</span>
+                    </button>
+                  ) : (
+                    /* Primary Toggle: Buka vs Sembunyikan */
+                    <button
+                      type="button"
+                      onClick={() => toggleQuestionBankStatus(quiz.id)}
+                      className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
+                        isHidden
+                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20'
+                          : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-500/20'
+                      }`}
+                    >
+                      {isHidden ? (
+                        <>
+                          <Unlock className="w-4 h-4 stroke-[2.5]" />
+                          <span>Buka Soal untuk {terms.memberTitle} 🚀</span>
+                        </>
+                      ) : (
+                        <>
+                          <Lock className="w-4 h-4 stroke-[2.5]" />
+                          <span>Kunci &amp; Simpan ke Persembunyian 🔒</span>
+                        </>
+                      )}
+                    </button>
+                  )}
 
-                  {/* Primary Toggle: Buka vs Sembunyikan */}
-                  <button
-                    type="button"
-                    onClick={() => toggleQuestionBankStatus(quiz.id)}
-                    className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
-                      isHidden
-                        ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20'
-                        : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-500/20'
-                    }`}
-                  >
-                    {isHidden ? (
-                      <>
-                        <Unlock className="w-4 h-4 stroke-[2.5]" />
-                        <span>Buka Soal untuk {terms.memberTitle} 🚀</span>
-                      </>
-                    ) : (
-                      <>
-                        <Lock className="w-4 h-4 stroke-[2.5]" />
-                        <span>Kunci &amp; Simpan ke Persembunyian 🔒</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* Secondary Actions */}
+                  {/* Secondary Actions (History/Hasil, Edit, Hapus - ALWAYS visible in both modes!) */}
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -959,14 +992,16 @@ export const QuestionBankAdminView: React.FC = () => {
                       <Plus className="w-3.5 h-3.5" />
                       <span>+ Pilihan Ganda</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => handleAddQuestion('essay')}
-                      className="px-3 py-1.5 rounded-xl bg-[#221845] hover:bg-[#2e205c] border border-[#392873] text-purple-300 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                      <span>+ Essay / Uraian</span>
-                    </button>
+                    {initialMode !== 'live' && (
+                      <button
+                        type="button"
+                        onClick={() => handleAddQuestion('essay')}
+                        className="px-3 py-1.5 rounded-xl bg-[#221845] hover:bg-[#2e205c] border border-[#392873] text-purple-300 text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Essay / Uraian</span>
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -986,26 +1021,28 @@ export const QuestionBankAdminView: React.FC = () => {
                           <span className="text-xs font-bold text-white">Soal Nomor {idx + 1}</span>
 
                           {/* Switch Type */}
-                          <div className="flex items-center gap-1 ml-3 bg-[#110d24] p-0.5 rounded-lg border border-[#261947]">
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateQuestion(idx, { type: 'pilihan_ganda' })}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
-                                q.type === 'pilihan_ganda' ? 'bg-pink-500 text-white' : 'text-slate-400'
-                              }`}
-                            >
-                              Pilihan Ganda
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleUpdateQuestion(idx, { type: 'essay' })}
-                              className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
-                                q.type === 'essay' ? 'bg-purple-600 text-white' : 'text-slate-400'
-                              }`}
-                            >
-                              Essay
-                            </button>
-                          </div>
+                          {initialMode !== 'live' && (
+                            <div className="flex items-center gap-1 ml-3 bg-[#110d24] p-0.5 rounded-lg border border-[#261947]">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateQuestion(idx, { type: 'pilihan_ganda' })}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                                  q.type === 'pilihan_ganda' ? 'bg-pink-500 text-white' : 'text-slate-400'
+                                }`}
+                              >
+                                Pilihan Ganda
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateQuestion(idx, { type: 'essay' })}
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                                  q.type === 'essay' ? 'bg-purple-600 text-white' : 'text-slate-400'
+                                }`}
+                              >
+                                Essay
+                              </button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center gap-2">
@@ -1326,6 +1363,8 @@ export const QuestionBankAdminView: React.FC = () => {
           questionBanks={questionBanks}
           showToast={showToast}
           submitQuizAnswers={useApp().submitQuizAnswers}
+          setLiveQuizShowAnswers={setLiveQuizShowAnswers}
+          setLiveQuizTimer={setLiveQuizTimer}
         />
       )}
     </div>
@@ -1344,6 +1383,8 @@ interface LiveQuizTeacherDashboardProps {
   questionBanks: QuestionBankItem[];
   showToast: (msg: string, type: 'info' | 'success' | 'warn') => void;
   submitQuizAnswers: any;
+  setLiveQuizShowAnswers: (id: string, show: boolean) => Promise<void>;
+  setLiveQuizTimer: (id: string, seconds: number) => Promise<void>;
 }
 
 const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
@@ -1358,7 +1399,12 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
   questionBanks,
   showToast,
   submitQuizAnswers,
+  setLiveQuizShowAnswers,
+  setLiveQuizTimer,
 }) => {
+  const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+
   // Finding the quiz data
   const quiz = questionBanks.find((q) => q.id === activeLiveQuiz.quizId);
   
@@ -1415,8 +1461,41 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
     .map(([id, data]) => ({ id, ...data }))
     .sort((a, b) => b.score - a.score);
 
+  // Sync with showAnswers value in DB
+  useEffect(() => {
+    if (activeLiveQuiz.showAnswers !== showLiveStats) {
+      setShowLiveStats(activeLiveQuiz.showAnswers || false);
+    }
+  }, [activeLiveQuiz.showAnswers]);
+
+  // Countdown timer logic
+  useEffect(() => {
+    if (!activeLiveQuiz.activeQuestionEndsAt || activeLiveQuiz.status !== 'active') {
+      setSecondsLeft(0);
+      return;
+    }
+    const ends = new Date(activeLiveQuiz.activeQuestionEndsAt).getTime();
+    const updateTimer = () => {
+      const diff = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
+      setSecondsLeft(diff);
+      if (diff === 0 && !activeLiveQuiz.showAnswers) {
+        // Auto show answers when timer runs out
+        setLiveQuizShowAnswers(activeLiveQuiz.id, true);
+        setShowLiveStats(true);
+        playNotificationSound('success');
+      }
+    };
+    updateTimer();
+    const timer = setInterval(updateTimer, 1000);
+    return () => clearInterval(timer);
+  }, [activeLiveQuiz.activeQuestionEndsAt, activeLiveQuiz.status, activeLiveQuiz.showAnswers]);
+
   const handleStartQuiz = async () => {
+    const limit = currentQuestion?.points ? currentQuestion.points * 3 : (quiz?.timeLimitPerQuestionSeconds || 30);
+    const finalLimit = limit > 0 ? limit : 30;
+
     await updateLiveQuizStatus(activeLiveQuiz.id, 'active');
+    await setLiveQuizTimer(activeLiveQuiz.id, finalLimit);
     showToast('Kuis live resmi dimulai! Semoga sukses untuk para siswa! 🚀', 'success');
   };
 
@@ -1425,12 +1504,19 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
       await updateLiveQuizStatus(activeLiveQuiz.id, 'ended');
       showToast('Kuis selesai! Mari kita lihat sang juara di podium! 🏆', 'success');
     } else {
-      await nextLiveQuizQuestion(activeLiveQuiz.id, activeLiveQuiz.currentQuestionIndex + 1);
+      const nextIdx = activeLiveQuiz.currentQuestionIndex + 1;
+      const nextQ = quiz?.questions?.[nextIdx];
+      const limit = nextQ?.points ? nextQ.points * 3 : (quiz?.timeLimitPerQuestionSeconds || 30);
+      const finalLimit = limit > 0 ? limit : 30;
+
+      await nextLiveQuizQuestion(activeLiveQuiz.id, nextIdx);
+      await setLiveQuizTimer(activeLiveQuiz.id, finalLimit);
       setShowLiveStats(false);
     }
   };
 
-  const handleRevealStats = () => {
+  const handleRevealStats = async () => {
+    await setLiveQuizShowAnswers(activeLiveQuiz.id, true);
     setShowLiveStats(true);
     playNotificationSound('success');
   };
@@ -1466,11 +1552,14 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
     }
   };
 
-  const handleForceClose = async () => {
-    if (confirm('Apakah Anda yakin ingin mematikan sesi Kuis Live ini? Semua data sesi real-time saat ini akan dihapus.')) {
-      await deleteLiveQuiz(activeLiveQuiz.id);
-      setActiveLiveQuiz(null);
-    }
+  const handleForceClose = () => {
+    setIsConfirmExitOpen(true);
+  };
+
+  const handleConfirmExit = async () => {
+    await deleteLiveQuiz(activeLiveQuiz.id);
+    setActiveLiveQuiz(null);
+    setIsConfirmExitOpen(false);
   };
 
   if (!quiz) return null;
@@ -1500,7 +1589,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
           <button
             type="button"
             onClick={handleForceClose}
-            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/25 border border-red-500/25 text-red-400 transition-colors"
+            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/25 border border-red-500/25 text-red-400 transition-colors cursor-pointer"
             title="Tutup Sesi"
           >
             <X className="w-4 h-4 stroke-[3]" />
@@ -1580,70 +1669,118 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
             {/* Response Statistics Card */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
               
-              {/* Option Distribution Bars */}
+              {/* Option Distribution Bars or Essay Student Answers */}
               <div className="md:col-span-8 p-5 sm:p-6 rounded-3xl bg-[#140e2b] border border-[#2d1e57] space-y-4">
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
-                  {showLiveStats ? 'Distribusi Jawaban Siswa 📊' : 'Pilihan Jawaban'}
+                  {currentQuestion.type === 'essay'
+                    ? 'Jawaban Essay Siswa 📝'
+                    : showLiveStats
+                    ? 'Distribusi Jawaban Siswa 📊'
+                    : 'Pilihan Jawaban'}
                 </h3>
                 
-                <div className="space-y-3">
-                  {['A', 'B', 'C', 'D'].map((lbl, idx) => {
-                    const optText = currentQuestion.options?.[idx] || '';
-                    const count = optionCounts[idx];
-                    const percentage = currentAnswers.length > 0 ? Math.round((count / currentAnswers.length) * 100) : 0;
-                    const isCorrect = currentQuestion.correctOptionIndex === idx;
+                {currentQuestion.type === 'essay' ? (
+                  <div className="space-y-4">
+                    {/* Key answer display */}
+                    <div className="p-4 rounded-2xl bg-purple-950/30 border border-purple-500/30">
+                      <span className="text-[10px] font-black text-purple-300 block mb-1">KUNCI KATA KUNCI JAWABAN (ESSAY)</span>
+                      <p className="text-sm font-bold text-white">
+                        {currentQuestion.essayAnswerKey || 'Bebas / Auto Benar (tanpa filter kata kunci)'}
+                      </p>
+                    </div>
 
-                    // Option branding colors (Kahoot style!)
-                    const colors = [
-                      'bg-red-500/20 border-red-500/40 text-red-300',
-                      'bg-blue-500/20 border-blue-500/40 text-blue-300',
-                      'bg-amber-500/20 border-amber-500/40 text-amber-300',
-                      'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
-                    ];
-
-                    const barColors = [
-                      'bg-red-500',
-                      'bg-blue-500',
-                      'bg-amber-500',
-                      'bg-emerald-500',
-                    ];
-
-                    return (
-                      <div key={idx} className="space-y-1.5">
-                        <div className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between ${
-                          showLiveStats && isCorrect
-                            ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg shadow-emerald-500/10'
-                            : showLiveStats
-                            ? 'bg-[#181335]/40 border-[#2d2252]/40 opacity-55'
-                            : colors[idx]
-                        }`}>
-                          <div className="flex items-center gap-2 truncate">
-                            <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center font-black">
-                              {lbl}
-                            </span>
-                            <span className="truncate">{optText}</span>
+                    {/* Student answers list */}
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
+                      {currentAnswers.length === 0 ? (
+                        <p className="text-xs text-slate-500 italic py-4 text-center">Belum ada siswa yang menjawab...</p>
+                      ) : (
+                        currentAnswers.map((ans) => (
+                          <div key={ans.id} className="p-3.5 rounded-2xl bg-[#1b153a] border border-[#2e1d5a] flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200">
+                            <div className="space-y-1">
+                              <span className="text-xs font-black text-pink-300 block">🎭 {ans.memberName}</span>
+                              <p className="text-xs text-white bg-[#0e0924] p-2.5 rounded-xl border border-[#251744] font-mono leading-relaxed whitespace-pre-wrap">
+                                {ans.essayAnswer || '(kosong)'}
+                              </p>
+                            </div>
+                            <div className="shrink-0 flex items-center gap-2">
+                              {showLiveStats && (
+                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
+                                  ans.isCorrect
+                                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
+                                    : 'bg-red-500/15 border-red-500/30 text-red-400'
+                                }`}>
+                                  {ans.isCorrect ? '✓ Cocok' : '✗ Belum Cocok'}
+                                </span>
+                              )}
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                +{ans.pointsEarned || 0} Poin
+                              </span>
+                            </div>
                           </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {['A', 'B', 'C', 'D'].map((lbl, idx) => {
+                      const optText = currentQuestion.options?.[idx] || '';
+                      const count = optionCounts[idx];
+                      const percentage = currentAnswers.length > 0 ? Math.round((count / currentAnswers.length) * 100) : 0;
+                      const isCorrect = currentQuestion.correctOptionIndex === idx;
+
+                      // Option branding colors (Kahoot style!)
+                      const colors = [
+                        'bg-red-500/20 border-red-500/40 text-red-300',
+                        'bg-blue-500/20 border-blue-500/40 text-blue-300',
+                        'bg-amber-500/20 border-amber-500/40 text-amber-300',
+                        'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
+                      ];
+
+                      const barColors = [
+                        'bg-red-500',
+                        'bg-blue-500',
+                        'bg-amber-500',
+                        'bg-emerald-500',
+                      ];
+
+                      return (
+                        <div key={idx} className="space-y-1.5">
+                          <div className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between ${
+                            showLiveStats && isCorrect
+                              ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg shadow-emerald-500/10'
+                              : showLiveStats
+                              ? 'bg-[#181335]/40 border-[#2d2252]/40 opacity-55'
+                              : colors[idx]
+                          }`}>
+                            <div className="flex items-center gap-2 truncate">
+                              <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center font-black">
+                                {lbl}
+                              </span>
+                              <span className="truncate">{optText}</span>
+                            </div>
+                            {showLiveStats && (
+                              <div className="flex items-center gap-2 shrink-0 font-mono">
+                                <span>{count} Siswa ({percentage}%)</span>
+                                {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Bar Distribution */}
                           {showLiveStats && (
-                            <div className="flex items-center gap-2 shrink-0 font-mono">
-                              <span>{count} Siswa ({percentage}%)</span>
-                              {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                            <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all duration-1000 ${isCorrect ? 'bg-emerald-500' : barColors[idx]}`}
+                                style={{ width: `${percentage}%` }}
+                              />
                             </div>
                           )}
                         </div>
-
-                        {/* Bar Distribution */}
-                        {showLiveStats && (
-                          <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
-                            <div
-                              className={`h-full rounded-full transition-all duration-1000 ${isCorrect ? 'bg-emerald-500' : barColors[idx]}`}
-                              style={{ width: `${percentage}%` }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
 
               {/* Connected response count wheel */}
@@ -1808,6 +1945,49 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
           </div>
         )}
       </main>
+
+      {/* Sleek Custom Confirm Modal instead of native browser popup to prevent iFrame blockages */}
+      {isConfirmExitOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm p-6 rounded-3xl bg-[#140e2d] border border-[#3c256d] text-center space-y-4 shadow-2xl relative animate-in zoom-in-95 duration-200">
+            {/* Tanda silang (X close button) */}
+            <button
+              type="button"
+              onClick={() => setIsConfirmExitOpen(false)}
+              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#20183b] transition-all cursor-pointer active:scale-95"
+              title="Tutup"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 text-xl mx-auto">
+              ⚠️
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-black text-white">Matikan Sesi Kuis Live?</h3>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Apakah Anda yakin ingin mematikan sesi kuis live ini? Seluruh riwayat jawaban real-time siswa saat ini akan dihapus permanen.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleConfirmExit}
+                className="py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black transition-all cursor-pointer shadow-lg shadow-red-600/20 active:scale-95"
+              >
+                Ya, Matikan Kuis
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsConfirmExitOpen(false)}
+                className="py-2.5 rounded-xl bg-[#1e173e] hover:bg-[#2c2058] border border-[#3b2374] text-slate-300 text-xs font-bold transition-all cursor-pointer active:scale-95"
+              >
+                Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

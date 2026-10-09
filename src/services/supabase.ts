@@ -147,6 +147,7 @@ export const SUPABASE_SQL_SCHEMA = `-- =========================================
 -- 1. Buat Tabel Profil Pengguna (Owner, Admin, Member)
 CREATE TABLE IF NOT EXISTS public.profiles (
   id TEXT PRIMARY KEY,
+  username TEXT,
   name TEXT NOT NULL,
   email TEXT,
   password TEXT DEFAULT 'password123',
@@ -158,12 +159,13 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Migrasi Keamanan & Skema: Hapus constraint dan tambahkan kolom educator_type
+-- Migrasi Keamanan & Skema: Hapus constraint dan tambahkan kolom educator_type dan username
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_email_key;
 DROP INDEX IF EXISTS public.profiles_email_unique_idx;
 DROP INDEX IF EXISTS profiles_email_idx;
 DROP INDEX IF EXISTS public.profiles_email_idx;
 ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS educator_type TEXT DEFAULT 'guru';
+ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS username TEXT;
 
 -- Seed Akun Owner Utama (Terhubung langsung dengan database SQL)
 INSERT INTO public.profiles (id, name, email, password, role, status)
@@ -256,6 +258,10 @@ ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS target_role 
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS recipient_id TEXT;
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS class_id TEXT;
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS task_id TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON public.notifications(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notifications_recipient_id ON public.notifications(recipient_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_class_id ON public.notifications(class_id);
 
 -- 6. Buat Tabel Jadwal Pelajaran / Mata Kuliah
 CREATE TABLE IF NOT EXISTS public.schedules (
@@ -449,11 +455,13 @@ CREATE TABLE IF NOT EXISTS public.question_banks (
   created_by TEXT NOT NULL,
   created_by_name TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  quiz_type TEXT DEFAULT 'bank_soal'
 );
 
 -- Migrasi Keamanan: Tambah kolom time_limit_per_question_seconds jika tabel sudah dibuat sebelumnya
 ALTER TABLE IF EXISTS public.question_banks ADD COLUMN IF NOT EXISTS time_limit_per_question_seconds INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS public.question_banks ADD COLUMN IF NOT EXISTS quiz_type TEXT DEFAULT 'bank_soal';
 
 CREATE INDEX IF NOT EXISTS idx_question_banks_class ON public.question_banks(class_id);
 CREATE INDEX IF NOT EXISTS idx_question_banks_status ON public.question_banks(status);
@@ -570,6 +578,7 @@ CREATE TABLE IF NOT EXISTS public.live_quizzes (
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'active', 'ended')),
   current_question_index INTEGER DEFAULT 0,
   active_question_ends_at TIMESTAMPTZ,
+  show_answers BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -577,6 +586,7 @@ CREATE TABLE IF NOT EXISTS public.live_quizzes (
 -- Kolom opsional jika tabel sudah ada sebelumnya
 ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS current_question_index INTEGER DEFAULT 0;
 ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS active_question_ends_at TIMESTAMPTZ;
+ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS show_answers BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_live_quizzes_class ON public.live_quizzes(class_id);
 CREATE INDEX IF NOT EXISTS idx_live_quizzes_status ON public.live_quizzes(status);
@@ -589,12 +599,16 @@ CREATE TABLE IF NOT EXISTS public.live_quiz_responses (
   member_id TEXT NOT NULL,
   member_name TEXT NOT NULL,
   selected_option_index INTEGER,
+  essay_answer TEXT,
   is_correct BOOLEAN DEFAULT false,
   points_earned INTEGER DEFAULT 0,
   response_time_ms INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT uq_live_quiz_member_question UNIQUE (live_quiz_id, member_id, question_index)
 );
+
+-- Kolom opsional jika tabel sudah ada sebelumnya
+ALTER TABLE IF EXISTS public.live_quiz_responses ADD COLUMN IF NOT EXISTS essay_answer TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_live_quiz_responses_quiz ON public.live_quiz_responses(live_quiz_id);
 

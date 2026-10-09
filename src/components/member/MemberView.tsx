@@ -111,7 +111,7 @@ export const MemberView: React.FC = () => {
     ).length;
   }, [schedules, currentClass]);
 
-  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'jadwal' | 'forum' | 'ai_tutor' | 'fokus' | 'game' | 'pet' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
+  type MemberTab = 'dashboard' | 'tugas' | 'absensi' | 'bank_soal' | 'kuis_live' | 'jadwal' | 'forum' | 'ai_tutor' | 'fokus' | 'game' | 'pet' | 'statistik' | 'kalender' | 'creator' | 'anonwall' | 'saran' | 'chat_admin' | 'chat_owner' | 'setting';
 
   // Count unread chats from admin, other students, or owner
   const unreadChatsCount = useMemo(() => {
@@ -314,7 +314,7 @@ export const MemberView: React.FC = () => {
   }, [questionBanks, currentClass]);
 
   const getCategoryForTab = (tab: MemberTab): 'akademik' | 'hiburan' | 'komunikasi' | 'lainnya' => {
-    if (['dashboard', 'tugas', 'absensi', 'bank_soal', 'jadwal', 'kalender', 'statistik', 'fokus'].includes(tab)) return 'akademik';
+    if (['dashboard', 'tugas', 'absensi', 'bank_soal', 'kuis_live', 'jadwal', 'kalender', 'statistik', 'fokus'].includes(tab)) return 'akademik';
     if (['ai_tutor', 'game', 'pet'].includes(tab)) return 'hiburan';
     if (['forum', 'anonwall', 'saran', 'chat_admin', 'chat_owner'].includes(tab)) return 'komunikasi';
     return 'lainnya';
@@ -370,7 +370,8 @@ export const MemberView: React.FC = () => {
         { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
         { id: 'absensi', label: 'Absensi Kelas', icon: QrCode, iconColor: 'text-emerald-400' },
         { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen },
-        { id: 'bank_soal', label: 'Bank Soal & Ujian', icon: HelpCircle },
+        { id: 'bank_soal', label: 'Soal & Ujian', icon: HelpCircle },
+        { id: 'kuis_live', label: 'Kuis Live', icon: Sparkles, iconColor: 'text-purple-400' },
         { id: 'jadwal', label: 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
         { id: 'kalender', label: 'Kalender', icon: Calendar },
         { id: 'statistik', label: 'Statistik', icon: BarChart3 },
@@ -1565,7 +1566,14 @@ export const MemberView: React.FC = () => {
         {/* TAB: BANK SOAL & UJIAN */}
         {activeTab === 'bank_soal' && (
           <div className="space-y-4 animate-in fade-in duration-200">
-            <QuestionBankMemberView />
+            <QuestionBankMemberView initialMode="normal" />
+          </div>
+        )}
+
+        {/* TAB: REMINDQUIZ LIVE */}
+        {activeTab === 'kuis_live' && (
+          <div className="space-y-4 animate-in fade-in duration-200">
+            <QuestionBankMemberView initialMode="live" />
           </div>
         )}
 

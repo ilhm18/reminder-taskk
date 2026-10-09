@@ -170,6 +170,7 @@ export const AdminPanel: React.FC = () => {
     | 'tugas'
     | 'absensi'
     | 'bank_soal'
+    | 'kuis_live'
     | 'jadwal'
     | 'forum'
     | 'spin'
@@ -220,6 +221,10 @@ export const AdminPanel: React.FC = () => {
         ujian: 'bank_soal',
         quiz: 'bank_soal',
         'bank-soal': 'bank_soal',
+        kuis_live: 'kuis_live',
+        'kuis-live': 'kuis_live',
+        livequiz: 'kuis_live',
+        'live-quiz': 'kuis_live',
         jadwal: 'jadwal',
         schedule: 'jadwal',
         forum: 'forum',
@@ -504,6 +509,7 @@ export const AdminPanel: React.FC = () => {
         { id: 'tugas', label: 'Materi & Tugas', icon: BookOpen },
         { id: 'absensi', label: `Absensi ${terms.memberTitlePlural}`, icon: QrCode, iconColor: 'text-emerald-400' },
         { id: 'bank_soal', label: terms.isCollege ? 'Bank Soal Perkuliahan' : 'Bank Soal & Ujian', icon: HelpCircle },
+        { id: 'kuis_live', label: 'Kuis Live', icon: Sparkles, iconColor: 'text-purple-400' },
         { id: 'jadwal', label: terms.isCollege ? 'Jadwal Perkuliahan' : 'Jadwal Pelajaran', icon: CalendarDays, iconColor: 'text-pink-400' },
         { id: 'kalender', label: 'Kalender', icon: Calendar },
         { id: 'statistik', label: `Statistik ${terms.memberTitlePlural}`, icon: BarChart3 },
@@ -886,6 +892,8 @@ export const AdminPanel: React.FC = () => {
                   ? 'Presensi Kelas (Kode QR Real-Time)'
                   : activeTab === 'bank_soal'
                   ? 'Bank Soal & Ujian'
+                  : activeTab === 'kuis_live'
+                  ? 'Kuis Live'
                   : activeTab === 'jadwal'
                   ? 'Jadwal Mata Pelajaran / Kuliah'
                   : activeTab === 'spin'
@@ -1827,7 +1835,12 @@ export const AdminPanel: React.FC = () => {
 
           {/* TAB: BANK SOAL & UJIAN */}
           {activeTab === 'bank_soal' && (
-            <QuestionBankAdminView />
+            <QuestionBankAdminView initialMode="normal" />
+          )}
+
+          {/* TAB: REMINDQUIZ LIVE */}
+          {activeTab === 'kuis_live' && (
+            <QuestionBankAdminView initialMode="live" />
           )}
 
           {/* TAB: JADWAL PELAJARAN / MATA KULIAH */}

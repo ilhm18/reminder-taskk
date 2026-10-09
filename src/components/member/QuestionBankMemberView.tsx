@@ -26,7 +26,7 @@ import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { QuestionBankItem, QuizSubmission, QuizSubmissionAnswer } from '../../types';
 import { playNotificationSound } from '../../utils/notification';
 
-export const QuestionBankMemberView: React.FC = () => {
+export const QuestionBankMemberView: React.FC<{ initialMode?: 'normal' | 'live' }> = ({ initialMode = 'normal' }) => {
   const {
     currentClass,
     questionBanks,
@@ -44,9 +44,16 @@ export const QuestionBankMemberView: React.FC = () => {
 
   // STRICT SECURITY: Members can ONLY see question banks where status === 'published'
   // Hidden question banks (in persembunyian) are completely filtered out!
+  // We also partition by quizType (soal/ujian vs kuis_live)
   const publishedQuizzes = questionBanks.filter((qb) => {
     const isForClass = !currentClass?.id || qb.classId === currentClass.id;
-    return isForClass && qb.status === 'published';
+    if (!isForClass || qb.status !== 'published') return false;
+
+    if (initialMode === 'live') {
+      return qb.quizType === 'kuis_live';
+    } else {
+      return qb.quizType === 'bank_soal' || !qb.quizType;
+    }
   });
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -56,18 +63,61 @@ export const QuestionBankMemberView: React.FC = () => {
   // Live Quiz Client States
   const [joinedLiveQuizId, setJoinedLiveQuizId] = useState<string | null>(null);
   const [selectedLiveOptionIndex, setSelectedLiveOptionIndex] = useState<number | null>(null);
+  const [liveEssayAnswer, setLiveEssayAnswer] = useState('');
   const [isLiveSubmitted, setIsLiveSubmitted] = useState(false);
+  const [liveSecondsLeft, setLiveSecondsLeft] = useState<number>(0);
 
-  // Find if there is an active live quiz in the class
+  // Find if there is an active live quiz in the class (including waiting, active, or ended)
   const classId = currentClass?.id || currentUser?.classId || '';
-  const activeDbLiveQuiz = liveQuizzes.find((l) => l.classId === classId && l.status !== 'ended');
+  const activeDbLiveQuiz = liveQuizzes.find((l) => l.classId === classId);
 
-  // Sync state if active live quiz ends
+  // Sync state if active live quiz ends (e.g., deleted entirely)
   useEffect(() => {
     if (!activeDbLiveQuiz && joinedLiveQuizId) {
       setJoinedLiveQuizId(null);
     }
   }, [activeDbLiveQuiz, joinedLiveQuizId]);
+
+  // Live countdown timer logic matching Kahoot!
+  useEffect(() => {
+    if (!activeDbLiveQuiz?.activeQuestionEndsAt || activeDbLiveQuiz.status !== 'active') {
+      setLiveSecondsLeft(0);
+      return;
+    }
+
+    const ends = new Date(activeDbLiveQuiz.activeQuestionEndsAt).getTime();
+    const updateTimer = () => {
+      const diff = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
+      setLiveSecondsLeft(diff);
+    };
+
+    updateTimer();
+    const timer = setInterval(updateTimer, 1000);
+    return () => clearInterval(timer);
+  }, [activeDbLiveQuiz?.activeQuestionEndsAt, activeDbLiveQuiz?.status]);
+
+  // Auto-submit choice on time out (when liveSecondsLeft hits 0)
+  useEffect(() => {
+    if (
+      activeDbLiveQuiz &&
+      activeDbLiveQuiz.status === 'active' &&
+      liveSecondsLeft === 0 &&
+      !isLiveSubmitted &&
+      !activeDbLiveQuiz.showAnswers &&
+      joinedLiveQuizId
+    ) {
+      setIsLiveSubmitted(true);
+      setSelectedLiveOptionIndex(-1);
+      submitLiveQuizResponse(
+        activeDbLiveQuiz.id,
+        activeDbLiveQuiz.currentQuestionIndex,
+        -1, // No option chosen
+        false, // Incorrect
+        0, // 0 points
+        0 // response time
+      ).catch(console.error);
+    }
+  }, [liveSecondsLeft, isLiveSubmitted, activeDbLiveQuiz, joinedLiveQuizId]);
 
   // Sync state if active live quiz shifts question index
   useEffect(() => {
@@ -81,9 +131,11 @@ export const QuestionBankMemberView: React.FC = () => {
       );
       if (myResp) {
         setSelectedLiveOptionIndex(myResp.selectedOptionIndex ?? null);
+        setLiveEssayAnswer(myResp.essayAnswer || '');
         setIsLiveSubmitted(true);
       } else {
         setSelectedLiveOptionIndex(null);
+        setLiveEssayAnswer('');
         setIsLiveSubmitted(false);
       }
     }
@@ -264,6 +316,131 @@ export const QuestionBankMemberView: React.FC = () => {
 
   // RENDER 0: REMINDQUIZ LIVE - STUDENT SCREEN
   if (joinedLiveQuizId && activeDbLiveQuiz) {
+    if (activeDbLiveQuiz.status === 'ended') {
+      const lobbyStudents = liveQuizResponses.filter(
+        (r) => r.liveQuizId === activeDbLiveQuiz.id && r.questionIndex === -1
+      );
+
+      const studentScores: Record<string, { name: string; score: number; answersCount: number }> = {};
+      
+      lobbyStudents.forEach((student) => {
+        studentScores[student.memberId] = {
+          name: student.memberName,
+          score: 0,
+          answersCount: 0,
+        };
+      });
+
+      liveQuizResponses
+        .filter((r) => r.liveQuizId === activeDbLiveQuiz.id && r.questionIndex >= 0)
+        .forEach((res) => {
+          if (!studentScores[res.memberId]) {
+            studentScores[res.memberId] = {
+              name: res.memberName,
+              score: 0,
+              answersCount: 0,
+            };
+          }
+          studentScores[res.memberId].score += res.pointsEarned || 0;
+          studentScores[res.memberId].answersCount++;
+        });
+
+      const leaderboard = Object.entries(studentScores)
+        .map(([id, data]) => ({ id, ...data }))
+        .sort((a, b) => b.score - a.score);
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-6 text-white animate-in zoom-in-95 duration-200">
+          <div className="p-8 rounded-3xl bg-[#140e2d] border border-[#302166] text-center space-y-8 shadow-2xl relative overflow-hidden">
+            <div className="absolute -right-20 -top-20 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -left-20 -bottom-20 w-80 h-80 bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="space-y-2 relative z-10">
+              <span className="text-4xl sm:text-5xl block animate-bounce">🏆</span>
+              <h1 className="text-2xl sm:text-4xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-pink-400 to-purple-400">
+                KUIS BERAKHIR
+              </h1>
+              <p className="text-xs text-slate-300">
+                Pertandingan luar biasa! Berikut adalah perolehan podium juara dan peringkat seluruh peserta kuis live kali ini.
+              </p>
+            </div>
+
+            {/* 3D-like Stacked Podium */}
+            <div className="flex items-end justify-center gap-2 sm:gap-4 max-w-sm mx-auto pt-8 pb-4 relative z-10">
+              {/* 2nd Place */}
+              {leaderboard[1] && (
+                <div className="flex flex-col items-center gap-1.5 flex-1 animate-in slide-in-from-bottom duration-500 delay-100 fill-mode-both">
+                  <span className="text-[10px] font-black text-slate-300 truncate max-w-[80px]" title={leaderboard[1].name}>
+                    🥈 {leaderboard[1].name}
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-bold">{leaderboard[1].score} pts</span>
+                  <div className="w-full h-20 rounded-t-2xl bg-gradient-to-t from-slate-600/20 to-slate-400/30 border-t-2 border-slate-300 flex items-center justify-center font-black text-slate-300 text-sm shadow-lg">
+                    2
+                  </div>
+                </div>
+              )}
+
+              {/* 1st Place */}
+              {leaderboard[0] && (
+                <div className="flex flex-col items-center gap-1.5 flex-1 animate-in slide-in-from-bottom duration-700 fill-mode-both">
+                  <span className="text-xs font-black text-amber-300 truncate max-w-[90px] animate-pulse" title={leaderboard[0].name}>
+                    🥇 {leaderboard[0].name}
+                  </span>
+                  <span className="text-[10px] text-amber-400 font-black">{leaderboard[0].score} pts</span>
+                  <div className="w-full h-28 rounded-t-2xl bg-gradient-to-t from-amber-600/20 to-amber-400/30 border-t-2 border-amber-400 flex items-center justify-center font-black text-amber-400 text-lg shadow-2xl relative">
+                    <div className="absolute -top-3 text-lg animate-bounce">👑</div>
+                    1
+                  </div>
+                </div>
+              )}
+
+              {/* 3rd Place */}
+              {leaderboard[2] && (
+                <div className="flex flex-col items-center gap-1.5 flex-1 animate-in slide-in-from-bottom duration-500 delay-200 fill-mode-both">
+                  <span className="text-[10px] font-black text-amber-600 truncate max-w-[80px]" title={leaderboard[2].name}>
+                    🥉 {leaderboard[2].name}
+                  </span>
+                  <span className="text-[9px] text-amber-700 font-bold">{leaderboard[2].score} pts</span>
+                  <div className="w-full h-14 rounded-t-2xl bg-gradient-to-t from-amber-800/20 to-amber-700/30 border-t-2 border-amber-700 flex items-center justify-center font-black text-amber-600 text-xs shadow-md">
+                    3
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Ranks 4 and Below */}
+            {leaderboard.length > 3 && (
+              <div className="max-w-sm mx-auto p-3.5 rounded-2xl bg-[#0c091e] border border-[#23184a] space-y-1.5 max-h-36 overflow-y-auto relative z-10 text-left">
+                <span className="text-[8px] font-black text-slate-500 uppercase tracking-widest text-left block mb-1">PERINGKAT PESERTA LAIN</span>
+                {leaderboard.slice(3).map((stud, idx) => (
+                  <div key={stud.id} className="flex items-center justify-between text-[11px] font-bold text-slate-300 px-2 py-1 rounded-lg bg-white/5 border border-white/5">
+                    <div className="flex items-center gap-1.5 truncate">
+                      <span className="font-mono text-slate-400">{idx + 4}.</span>
+                      <span className="truncate">{stud.name}</span>
+                    </div>
+                    <span className="text-slate-400">{stud.score} Poin</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Close Button to leave and return to lobby */}
+            <div className="pt-2 relative z-10">
+              <button
+                type="button"
+                onClick={() => {
+                  setJoinedLiveQuizId(null);
+                }}
+                className="px-6 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-black text-xs transition-all active:scale-95 cursor-pointer shadow-md"
+              >
+                Selesai &amp; Keluar Kuis
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     const liveQuizData = questionBanks.find((q) => q.id === activeDbLiveQuiz.quizId);
     if (liveQuizData) {
       const currentQ = liveQuizData.questions?.[activeDbLiveQuiz.currentQuestionIndex];
@@ -354,52 +531,187 @@ export const QuestionBankMemberView: React.FC = () => {
           )}
 
           {activeDbLiveQuiz.status === 'active' && currentQ && (
-            <div className="space-y-6">
+            <div className="space-y-6 animate-in fade-in duration-300">
+              {/* Live Countdown Timer Bar matching Kahoot! */}
+              {activeDbLiveQuiz.activeQuestionEndsAt && !activeDbLiveQuiz.showAnswers && (
+                <div className="p-3.5 rounded-2xl bg-[#171233] border border-[#2e2154] space-y-1.5 shadow-md">
+                  <div className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className={`w-2.5 h-2.5 rounded-full ${liveSecondsLeft <= 5 ? 'bg-red-500 animate-ping' : 'bg-pink-500'}`} />
+                      <span className="font-bold text-slate-300">Sisa Waktu Soal Ini:</span>
+                    </div>
+                    <div className={`font-mono font-black text-xs ${liveSecondsLeft <= 5 ? 'text-red-400 animate-bounce' : 'text-pink-300'}`}>
+                      {liveSecondsLeft} Detik
+                    </div>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-[#0d091e] overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-1000 ease-linear rounded-full ${
+                        liveSecondsLeft <= 5 ? 'bg-red-500 animate-pulse' : 'bg-gradient-to-r from-pink-500 to-purple-500'
+                      }`}
+                      style={{ width: `${Math.max(0, Math.min(100, (liveSecondsLeft / 30) * 100))}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Question Banner */}
               <div className="text-center p-6 rounded-3xl bg-[#140e2d] border border-[#2d1e57] space-y-2">
                 <span className="px-2.5 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-[10px] font-bold font-mono">
-                  Soal {activeDbLiveQuiz.currentQuestionIndex + 1} ({currentQ.points} Poin)
+                  Soal {activeDbLiveQuiz.currentQuestionIndex + 1} ({currentQ.points} Poin) • {currentQ.type === 'essay' ? 'ESSAY' : 'PILIHAN GANDA'}
                 </span>
                 <h1 className="text-lg sm:text-xl font-black leading-relaxed">
                   {currentQ.questionText}
                 </h1>
               </div>
 
-              {/* Answering area */}
-              {!isLiveSubmitted ? (
-                <div className="space-y-3">
-                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center block">PILIH JAWABAN ANDA SEKARANG:</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {['A', 'B', 'C', 'D'].map((lbl, idx) => {
-                      const optText = currentQ.options?.[idx] || '';
-                      
-                      const colors = [
-                        'bg-red-500 hover:bg-red-600 shadow-red-500/25',
-                        'bg-blue-500 hover:bg-blue-600 shadow-blue-500/25',
-                        'bg-amber-500 hover:bg-amber-600 shadow-amber-500/25',
-                        'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/25',
-                      ];
+              {/* KAHOOT STYLE SHOW ANSWERS (CORRECT / INCORRECT RESULTS FLASHCARD) */}
+              {activeDbLiveQuiz.showAnswers ? (
+                <div className={`p-8 rounded-3xl text-center space-y-6 border shadow-2xl animate-in zoom-in duration-300 ${
+                  myResp?.isCorrect
+                    ? 'bg-gradient-to-br from-emerald-600 via-teal-700 to-emerald-950 border-emerald-400 text-white'
+                    : 'bg-gradient-to-br from-red-600 via-rose-700 to-red-950 border-red-400 text-white'
+                }`}>
+                  <div className="space-y-4">
+                    <div className={`w-20 h-20 rounded-full flex items-center justify-center text-4xl mx-auto shadow-lg animate-bounce ${
+                      myResp?.isCorrect ? 'bg-emerald-500/35 border-2 border-emerald-300' : 'bg-red-500/35 border-2 border-red-300'
+                    }`}>
+                      {myResp?.isCorrect ? '✓' : '✗'}
+                    </div>
 
-                      return (
-                        <button
-                          key={idx}
-                          type="button"
-                          onClick={() => handleSelectOption(idx)}
-                          className={`p-4 sm:p-5 rounded-2xl text-left font-black text-sm text-white shadow-lg transition-all active:scale-95 flex items-center gap-3 cursor-pointer ${colors[idx]}`}
-                        >
-                          <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-lg font-black font-mono shrink-0">
-                            {lbl}
-                          </span>
-                          <span className="truncate">{optText}</span>
-                        </button>
-                      );
-                    })}
+                    <div className="space-y-1">
+                      <h2 className="text-2xl sm:text-3xl font-black tracking-tight uppercase">
+                        {myResp?.isCorrect ? 'Jawaban Anda Benar! 🎉' : 'Jawaban Anda Salah! 😢'}
+                      </h2>
+                      <p className="text-xs text-white/80 max-w-md mx-auto">
+                        {myResp?.isCorrect
+                          ? `Hebat! Anda berhasil menjawab soal ini dengan cepat dan meraih poin.`
+                          : `Jangan berkecil hati, mari pelajari jawaban yang benar dan coba lagi di soal berikutnya.`}
+                      </p>
+                    </div>
+
+                    {/* Pembahasan / Correct Answer Info */}
+                    <div className="p-4 rounded-2xl bg-black/30 border border-white/10 text-left space-y-2 text-xs">
+                      <div>
+                        <span className="font-bold text-white/60 block mb-0.5">KUNCI JAWABAN BENAR:</span>
+                        <p className="text-sm font-black text-amber-300">
+                          {isMC && currentQ.correctOptionIndex !== undefined && currentQ.correctOptionIndex >= 0
+                            ? `${['A', 'B', 'C', 'D'][currentQ.correctOptionIndex]}. ${currentQ.options?.[currentQ.correctOptionIndex]}`
+                            : `${currentQ.essayAnswerKey || 'Bebas / Jawaban Terbuka'}`}
+                        </p>
+                      </div>
+                      {myResp && (
+                        <div className="pt-2 border-t border-white/5">
+                          <span className="font-bold text-white/60 block mb-0.5">JAWABAN ANDA:</span>
+                          <p className="text-white font-mono bg-black/20 p-2 rounded-lg mt-1 border border-white/5">
+                            {isMC
+                              ? myResp.selectedOptionIndex !== undefined && myResp.selectedOptionIndex >= 0 && currentQ.options
+                                ? `${['A', 'B', 'C', 'D'][myResp.selectedOptionIndex]}. ${currentQ.options[myResp.selectedOptionIndex]}`
+                                : '(Tidak Menjawab)'
+                              : myResp.essayAnswer || '(Tidak Menjawab)'}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="p-3.5 rounded-2xl bg-black/40 border border-white/10 text-xs font-mono inline-block">
+                      Poin Diperoleh: <strong className="text-amber-400 text-sm font-black">+{myResp?.pointsEarned || 0} Poin</strong> • Total Skor: <span className="text-white font-black">{totalPointsEarned} Poin</span>
+                    </div>
                   </div>
                 </div>
+              ) : !isLiveSubmitted ? (
+                /* ANSWERING AREA: INPUT ACTIVE */
+                <div className="space-y-4">
+                  {currentQ.type === 'essay' ? (
+                    /* ESSAY INPUT FORM */
+                    <div className="p-5 rounded-3xl bg-[#140e2d] border border-[#2d1e57] space-y-4">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block">TULIS JAWABAN ESSAY ANDA:</span>
+                      <textarea
+                        required
+                        rows={3}
+                        value={liveEssayAnswer}
+                        onChange={(e) => setLiveEssayAnswer(e.target.value)}
+                        placeholder="Ketik jawaban lengkap Anda di sini... (Pastikan mengandung kata kunci penting sesuai instruksi pengajar)"
+                        className="w-full p-3 rounded-2xl bg-[#0d091e] border-2 border-[#2b1f55] text-xs text-white focus:outline-none focus:border-pink-500 resize-none leading-relaxed font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (!liveEssayAnswer.trim()) {
+                            showToast('Harap isi jawaban essay Anda terlebih dahulu.', 'warn');
+                            return;
+                          }
+                          setIsLiveSubmitted(true);
+                          playNotificationSound('success');
+                          
+                          const cleanAnswer = liveEssayAnswer.trim().toLowerCase();
+                          const cleanKey = (currentQ.essayAnswerKey || '').trim().toLowerCase();
+                          
+                          let isCorrect = false;
+                          if (cleanKey) {
+                            const keywords = cleanKey.split(',').map(k => k.trim()).filter(Boolean);
+                            if (keywords.length > 0) {
+                              isCorrect = keywords.some(kw => cleanAnswer.includes(kw));
+                            } else {
+                              isCorrect = cleanAnswer.includes(cleanKey);
+                            }
+                          } else {
+                            isCorrect = cleanAnswer.length > 0;
+                          }
+
+                          await submitLiveQuizResponse(
+                            activeDbLiveQuiz.id,
+                            activeDbLiveQuiz.currentQuestionIndex,
+                            -1,
+                            isCorrect,
+                            isCorrect ? currentQ.points : 0,
+                            0,
+                            liveEssayAnswer.trim()
+                          );
+                        }}
+                        className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-400 hover:to-purple-500 text-white font-extrabold text-xs shadow-lg shadow-pink-500/25 flex items-center justify-center gap-2 cursor-pointer transition-all active:scale-95"
+                      >
+                        <Send className="w-4 h-4" />
+                        <span>Kirim Jawaban Essay</span>
+                      </button>
+                    </div>
+                  ) : (
+                    /* MULTIPLE CHOICE GRID (KAHOOT COLOR CODED BOXES) */
+                    <div className="space-y-3">
+                      <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center block">PILIH JAWABAN ANDA SEKARANG:</span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {['A', 'B', 'C', 'D'].map((lbl, idx) => {
+                          const optText = currentQ.options?.[idx] || '';
+                          
+                          const colors = [
+                            'bg-red-500 hover:bg-red-600 shadow-red-500/25',
+                            'bg-blue-500 hover:bg-blue-600 shadow-blue-500/25',
+                            'bg-amber-500 hover:bg-amber-600 shadow-amber-500/25',
+                            'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/25',
+                          ];
+
+                          return (
+                            <button
+                              key={idx}
+                              type="button"
+                              onClick={() => handleSelectOption(idx)}
+                              className={`p-4 sm:p-5 rounded-2xl text-left font-black text-sm text-white shadow-lg transition-all active:scale-95 flex items-center gap-3 cursor-pointer ${colors[idx]}`}
+                            >
+                              <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-lg font-black font-mono shrink-0">
+                                {lbl}
+                              </span>
+                              <span className="truncate">{optText}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
               ) : (
-                /* Submitted - Waiting Screen / Result Screen */
+                /* SUBMITTED BUT WAITING FOR TEACHER TO REVEAL KEY */
                 <div className="p-8 rounded-3xl bg-[#1b123d] border border-[#3b2179] text-center space-y-6">
-                  {myResp && selectedLiveOptionIndex !== null ? (
+                  {myResp ? (
                     <div className="space-y-4">
                       <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center text-3xl mx-auto animate-pulse mb-2">
                         🔒
@@ -408,10 +720,17 @@ export const QuestionBankMemberView: React.FC = () => {
                         Jawaban Terkunci!
                       </h2>
                       <p className="text-xs text-slate-300 max-w-sm mx-auto">
-                        Anda memilih: <strong className="text-pink-400">{['A', 'B', 'C', 'D'][selectedLiveOptionIndex]}. {currentQ.options?.[selectedLiveOptionIndex]}</strong>.
+                        Anda memilih:{' '}
+                        <strong className="text-pink-400">
+                          {isMC
+                            ? selectedLiveOptionIndex !== null && selectedLiveOptionIndex >= 0
+                              ? `${['A', 'B', 'C', 'D'][selectedLiveOptionIndex]}. ${currentQ.options?.[selectedLiveOptionIndex]}`
+                              : '(Tidak Menjawab)'
+                            : liveEssayAnswer || '(Tidak Menjawab)'}
+                        </strong>.
                       </p>
-                      <p className="text-[11px] text-slate-400 italic">
-                        Menunggu guru menampilkan pembahasan &amp; kunci jawaban...
+                      <p className="text-[11px] text-slate-400 italic animate-pulse">
+                        Menunggu pengajar menampilkan hasil dan kunci jawaban...
                       </p>
 
                       <div className="p-3 rounded-xl bg-[#140e2d]/60 border border-[#281a54] text-xs font-mono text-purple-300">
@@ -772,6 +1091,65 @@ export const QuestionBankMemberView: React.FC = () => {
     );
   }
 
+  // RENDER 2: LIST OF AVAILABLE EXAMS / LIVE KAHUT-STYLE HUB
+  if (initialMode === 'live') {
+    if (activeDbLiveQuiz) {
+      return (
+        <div className="max-w-2xl mx-auto space-y-6 text-white animate-in zoom-in-95 duration-200">
+          <div className="p-8 rounded-3xl bg-gradient-to-br from-[#20154e] via-[#16103b] to-[#0c0924] border-2 border-[#543b9c] text-center space-y-6 shadow-2xl relative overflow-hidden">
+            <div className="absolute -right-20 -top-20 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -left-20 -bottom-20 w-80 h-80 bg-pink-500/10 rounded-full blur-3xl pointer-events-none" />
+
+            <div className="space-y-2 relative z-10">
+              <div className="w-20 h-20 rounded-3xl bg-pink-500/20 text-pink-400 flex items-center justify-center text-4xl mx-auto shadow-lg animate-bounce mb-4 border border-pink-500/30">
+                🎙️
+              </div>
+              <span className="px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-black uppercase tracking-widest inline-block">
+                KUIS LIVE SEDANG AKTIF ⚡
+              </span>
+              <h1 className="text-2xl sm:text-3xl font-black text-white mt-3">
+                {activeDbLiveQuiz.title}
+              </h1>
+              <p className="text-xs text-slate-300 max-w-md mx-auto leading-relaxed">
+                {terms.educatorTitle} Anda telah memulai sesi kuis live interaktif. Ayo bergabung sekarang dan buktikan kemampuanmu di papan peringkat kelas!
+              </p>
+            </div>
+
+            <div className="relative z-10 pt-4 max-w-sm mx-auto">
+              <button
+                type="button"
+                onClick={handleJoinLiveQuiz}
+                className="w-full py-4 rounded-2xl bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 hover:from-pink-400 hover:to-indigo-500 text-white font-black text-sm shadow-xl shadow-pink-500/20 hover:shadow-indigo-500/20 transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+              >
+                <span>GABUNG KUIS LIVE SEKARANG 🎮</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="max-w-2xl mx-auto space-y-6 text-white animate-in zoom-in-95 duration-200">
+        <div className="p-10 rounded-3xl bg-[#140e2d] border border-[#2d1e57] text-center space-y-6 shadow-2xl relative overflow-hidden">
+          <div className="absolute -right-20 -top-20 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
+          
+          <div className="space-y-3 relative z-10">
+            <div className="w-16 h-16 rounded-full bg-purple-500/10 border border-purple-500/20 flex items-center justify-center text-3xl mx-auto mb-4 animate-bounce">
+              🎙️
+            </div>
+            <h1 className="text-xl sm:text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-purple-400">
+              Belum Ada Sesi Kuis Live
+            </h1>
+            <p className="text-xs text-slate-300 max-w-sm mx-auto leading-relaxed">
+              Silakan tunggu {terms.educatorTitle.toLowerCase()} Anda memulai kuis live interaktif di kelas ini. Saat kuis dimulai, layar ini akan otomatis terupdate!
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // RENDER 2: LIST OF AVAILABLE EXAMS
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -780,12 +1158,12 @@ export const QuestionBankMemberView: React.FC = () => {
         <div className="absolute -right-10 -top-10 w-80 h-80 bg-purple-500/10 rounded-full blur-3xl pointer-events-none" />
         <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
           <div>
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-xs font-bold mb-3">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-[10px] font-bold mb-3">
               <BookOpen className="w-3.5 h-3.5" />
               <span>Ujian &amp; Latihan Soal Mandiri</span>
             </div>
             <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-              Bank Soal &amp; Ujian Kelas
+              Soal &amp; Ujian Kelas
             </h1>
             <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
               Kerjakan paket latihan soal, kuis pilihan ganda, dan uraian essay yang telah dibuka oleh {terms.educatorTitle.toLowerCase()}/admin kelas Anda.
@@ -794,35 +1172,7 @@ export const QuestionBankMemberView: React.FC = () => {
         </div>
       </div>
 
-      {/* REMINDQUIZ LIVE - JOIN ACTIVE SESSION CARD */}
-      {activeDbLiveQuiz && !joinedLiveQuizId && (
-        <div className="p-5 rounded-3xl bg-gradient-to-r from-purple-900/60 to-pink-900/60 border border-purple-500/40 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-bounce">
-          <div className="flex items-center gap-3.5 text-center sm:text-left">
-            <div className="w-12 h-12 rounded-2xl bg-pink-500/20 text-pink-400 flex items-center justify-center text-3xl shrink-0">
-              🎙️
-            </div>
-            <div>
-              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-black uppercase tracking-widest">
-                LIVE INTERAKTIF
-              </span>
-              <h3 className="text-sm sm:text-base font-black text-white mt-1">
-                Kuis Live Kelas Sedang Berlangsung!
-              </h3>
-              <p className="text-xs text-purple-200">
-                Ayo gabung ke kuis <strong className="text-white">"{activeDbLiveQuiz.title}"</strong> bersama teman sekelasmu sekarang!
-              </p>
-            </div>
-          </div>
 
-          <button
-            type="button"
-            onClick={handleJoinLiveQuiz}
-            className="px-5 py-3 rounded-xl bg-white text-purple-950 font-black text-xs hover:bg-purple-100 transition-all shrink-0 active:scale-95 cursor-pointer shadow-md"
-          >
-            Gabung Sekarang 🎮
-          </button>
-        </div>
-      )}
 
       {/* Search Bar */}
       <div className="p-4 rounded-2xl bg-[#14102b] border border-[#271e4d] flex items-center justify-between gap-3 shadow-md">
