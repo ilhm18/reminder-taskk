@@ -24,9 +24,20 @@ import {
 import { useApp } from '../../context/AppContext';
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
 import { QuestionBankItem, QuizSubmission, QuizSubmissionAnswer } from '../../types';
+import { playNotificationSound } from '../../utils/notification';
 
 export const QuestionBankMemberView: React.FC = () => {
-  const { currentClass, questionBanks, quizSubmissions, submitQuizAnswers, currentUser, showToast } = useApp();
+  const {
+    currentClass,
+    questionBanks,
+    quizSubmissions,
+    submitQuizAnswers,
+    currentUser,
+    showToast,
+    liveQuizzes,
+    liveQuizResponses,
+    submitLiveQuizResponse,
+  } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
@@ -41,6 +52,42 @@ export const QuestionBankMemberView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeQuizForTest, setActiveQuizForTest] = useState<QuestionBankItem | null>(null);
   const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
+
+  // Live Quiz Client States
+  const [joinedLiveQuizId, setJoinedLiveQuizId] = useState<string | null>(null);
+  const [selectedLiveOptionIndex, setSelectedLiveOptionIndex] = useState<number | null>(null);
+  const [isLiveSubmitted, setIsLiveSubmitted] = useState(false);
+
+  // Find if there is an active live quiz in the class
+  const classId = currentClass?.id || currentUser?.classId || '';
+  const activeDbLiveQuiz = liveQuizzes.find((l) => l.classId === classId && l.status !== 'ended');
+
+  // Sync state if active live quiz ends
+  useEffect(() => {
+    if (!activeDbLiveQuiz && joinedLiveQuizId) {
+      setJoinedLiveQuizId(null);
+    }
+  }, [activeDbLiveQuiz, joinedLiveQuizId]);
+
+  // Sync state if active live quiz shifts question index
+  useEffect(() => {
+    if (activeDbLiveQuiz && joinedLiveQuizId) {
+      // Find if student already submitted a response for the current question
+      const myResp = liveQuizResponses.find(
+        (r) =>
+          r.liveQuizId === activeDbLiveQuiz.id &&
+          r.memberId === currentUser?.id &&
+          r.questionIndex === activeDbLiveQuiz.currentQuestionIndex
+      );
+      if (myResp) {
+        setSelectedLiveOptionIndex(myResp.selectedOptionIndex ?? null);
+        setIsLiveSubmitted(true);
+      } else {
+        setSelectedLiveOptionIndex(null);
+        setIsLiveSubmitted(false);
+      }
+    }
+  }, [activeDbLiveQuiz?.currentQuestionIndex, joinedLiveQuizId, liveQuizResponses, currentUser]);
 
   // User's answers during the test
   const [userAnswers, setUserAnswers] = useState<Record<string, { selectedOptionIndex?: number; essayAnswerText?: string }>>({});
@@ -108,6 +155,21 @@ export const QuestionBankMemberView: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [activeQuizForTest, timeLeftSeconds]);
+
+  const handleJoinLiveQuiz = async () => {
+    if (!activeDbLiveQuiz) return;
+    setJoinedLiveQuizId(activeDbLiveQuiz.id);
+    
+    // Register in lobby by inserting a response with questionIndex = -1
+    await submitLiveQuizResponse(
+      activeDbLiveQuiz.id,
+      -1, // lobby index
+      -1,
+      false,
+      0,
+      0
+    );
+  };
 
   // Start Exam
   const handleStartQuiz = (quiz: QuestionBankItem) => {
@@ -199,6 +261,176 @@ export const QuestionBankMemberView: React.FC = () => {
     const s = secs % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
+
+  // RENDER 0: REMINDQUIZ LIVE - STUDENT SCREEN
+  if (joinedLiveQuizId && activeDbLiveQuiz) {
+    const liveQuizData = questionBanks.find((q) => q.id === activeDbLiveQuiz.quizId);
+    if (liveQuizData) {
+      const currentQ = liveQuizData.questions?.[activeDbLiveQuiz.currentQuestionIndex];
+      const isMC = currentQ?.type === 'pilihan_ganda';
+      const myResp = liveQuizResponses.find(
+        (r) =>
+          r.liveQuizId === activeDbLiveQuiz.id &&
+          r.memberId === currentUser?.id &&
+          r.questionIndex === activeDbLiveQuiz.currentQuestionIndex
+      );
+
+      const handleSelectOption = async (optIdx: number) => {
+        if (isLiveSubmitted || !currentQ) return;
+        const isCorrect = currentQ.correctOptionIndex === optIdx;
+        const points = isCorrect ? currentQ.points : 0;
+        setSelectedLiveOptionIndex(optIdx);
+        setIsLiveSubmitted(true);
+        playNotificationSound('beep');
+        
+        await submitLiveQuizResponse(
+          activeDbLiveQuiz.id,
+          activeDbLiveQuiz.currentQuestionIndex,
+          optIdx,
+          isCorrect,
+          points,
+          0 // response time
+        );
+      };
+
+      // Calculate total points earned by this member so far
+      const totalPointsEarned = liveQuizResponses
+        .filter((r) => r.liveQuizId === activeDbLiveQuiz.id && r.memberId === currentUser?.id && r.questionIndex >= 0)
+        .reduce((sum, r) => sum + (r.pointsEarned || 0), 0);
+
+      return (
+        <div className="max-w-2xl mx-auto space-y-6 text-white animate-in zoom-in-95 duration-200">
+          {/* Header */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-[#140e2d] border border-[#2d1e57] flex items-center justify-between shadow-xl">
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl">🎙️</span>
+              <div>
+                <span className="text-[9px] font-black text-pink-400 uppercase tracking-widest block">KUIS LIVE BERLANGSUNG</span>
+                <h2 className="text-xs sm:text-sm font-bold text-white truncate max-w-xs">{activeDbLiveQuiz.title}</h2>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                if (confirm('Keluar dari Kuis Live? Anda bisa bergabung kembali selama kuis belum selesai.')) {
+                  setJoinedLiveQuizId(null);
+                }
+              }}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs font-bold transition-all"
+            >
+              Keluar Kuis
+            </button>
+          </div>
+
+          {/* Body Panels */}
+          {activeDbLiveQuiz.status === 'waiting' && (
+            <div className="p-8 rounded-3xl bg-[#1b123e] border border-[#3b2179] text-center space-y-6">
+              <div className="space-y-2">
+                <div className="w-16 h-16 rounded-full bg-purple-500/10 border-2 border-purple-500/30 flex items-center justify-center text-3xl mx-auto animate-bounce mb-4">
+                  🎮
+                </div>
+                <h1 className="text-2xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-purple-400">
+                  Anda Sudah di Lobby!
+                </h1>
+                <p className="text-xs text-slate-300 max-w-sm mx-auto">
+                  Menunggu guru memulai kuis... Silakan santai sejenak selagi teman sekelasmu berkumpul.
+                </p>
+              </div>
+
+              {/* Connected students ticker */}
+              <div className="p-4 rounded-2xl bg-[#140e2d] border border-[#261754]">
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">PESERTA LAIN YANG BERGABUNG</span>
+                <div className="flex flex-wrap gap-2 justify-center max-h-32 overflow-y-auto">
+                  {liveQuizResponses
+                    .filter((r) => r.liveQuizId === activeDbLiveQuiz.id && r.questionIndex === -1)
+                    .map((p) => (
+                      <span key={p.id} className="px-2.5 py-1 rounded-lg bg-purple-950/40 border border-purple-500/20 text-xs font-bold">
+                        🎭 {p.memberName} {p.memberId === currentUser?.id ? '(Anda)' : ''}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {activeDbLiveQuiz.status === 'active' && currentQ && (
+            <div className="space-y-6">
+              {/* Question Banner */}
+              <div className="text-center p-6 rounded-3xl bg-[#140e2d] border border-[#2d1e57] space-y-2">
+                <span className="px-2.5 py-0.5 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-[10px] font-bold font-mono">
+                  Soal {activeDbLiveQuiz.currentQuestionIndex + 1} ({currentQ.points} Poin)
+                </span>
+                <h1 className="text-lg sm:text-xl font-black leading-relaxed">
+                  {currentQ.questionText}
+                </h1>
+              </div>
+
+              {/* Answering area */}
+              {!isLiveSubmitted ? (
+                <div className="space-y-3">
+                  <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest text-center block">PILIH JAWABAN ANDA SEKARANG:</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    {['A', 'B', 'C', 'D'].map((lbl, idx) => {
+                      const optText = currentQ.options?.[idx] || '';
+                      
+                      const colors = [
+                        'bg-red-500 hover:bg-red-600 shadow-red-500/25',
+                        'bg-blue-500 hover:bg-blue-600 shadow-blue-500/25',
+                        'bg-amber-500 hover:bg-amber-600 shadow-amber-500/25',
+                        'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/25',
+                      ];
+
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => handleSelectOption(idx)}
+                          className={`p-4 sm:p-5 rounded-2xl text-left font-black text-sm text-white shadow-lg transition-all active:scale-95 flex items-center gap-3 cursor-pointer ${colors[idx]}`}
+                        >
+                          <span className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center text-lg font-black font-mono shrink-0">
+                            {lbl}
+                          </span>
+                          <span className="truncate">{optText}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : (
+                /* Submitted - Waiting Screen / Result Screen */
+                <div className="p-8 rounded-3xl bg-[#1b123d] border border-[#3b2179] text-center space-y-6">
+                  {myResp && selectedLiveOptionIndex !== null ? (
+                    <div className="space-y-4">
+                      <div className="w-16 h-16 rounded-full bg-white/10 flex items-center justify-center text-3xl mx-auto animate-pulse mb-2">
+                        🔒
+                      </div>
+                      <h2 className="text-lg sm:text-xl font-black text-white">
+                        Jawaban Terkunci!
+                      </h2>
+                      <p className="text-xs text-slate-300 max-w-sm mx-auto">
+                        Anda memilih: <strong className="text-pink-400">{['A', 'B', 'C', 'D'][selectedLiveOptionIndex]}. {currentQ.options?.[selectedLiveOptionIndex]}</strong>.
+                      </p>
+                      <p className="text-[11px] text-slate-400 italic">
+                        Menunggu guru menampilkan pembahasan &amp; kunci jawaban...
+                      </p>
+
+                      <div className="p-3 rounded-xl bg-[#140e2d]/60 border border-[#281a54] text-xs font-mono text-purple-300">
+                        Total Skor Sementara: <strong className="text-amber-400 font-bold">{totalPointsEarned} Poin</strong>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <h2 className="text-base font-bold text-white">Mengirim Jawaban...</h2>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      );
+    }
+  }
 
   // RENDER 1: ACTIVE EXAM RUNNER SCREEN
   if (activeQuizForTest) {
@@ -561,6 +793,36 @@ export const QuestionBankMemberView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* REMINDQUIZ LIVE - JOIN ACTIVE SESSION CARD */}
+      {activeDbLiveQuiz && !joinedLiveQuizId && (
+        <div className="p-5 rounded-3xl bg-gradient-to-r from-purple-900/60 to-pink-900/60 border border-purple-500/40 shadow-2xl flex flex-col sm:flex-row items-center justify-between gap-4 animate-bounce">
+          <div className="flex items-center gap-3.5 text-center sm:text-left">
+            <div className="w-12 h-12 rounded-2xl bg-pink-500/20 text-pink-400 flex items-center justify-center text-3xl shrink-0">
+              🎙️
+            </div>
+            <div>
+              <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-black uppercase tracking-widest">
+                LIVE INTERAKTIF
+              </span>
+              <h3 className="text-sm sm:text-base font-black text-white mt-1">
+                Kuis Live Kelas Sedang Berlangsung!
+              </h3>
+              <p className="text-xs text-purple-200">
+                Ayo gabung ke kuis <strong className="text-white">"{activeDbLiveQuiz.title}"</strong> bersama teman sekelasmu sekarang!
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleJoinLiveQuiz}
+            className="px-5 py-3 rounded-xl bg-white text-purple-950 font-black text-xs hover:bg-purple-100 transition-all shrink-0 active:scale-95 cursor-pointer shadow-md"
+          >
+            Gabung Sekarang 🎮
+          </button>
+        </div>
+      )}
 
       {/* Search Bar */}
       <div className="p-4 rounded-2xl bg-[#14102b] border border-[#271e4d] flex items-center justify-between gap-3 shadow-md">

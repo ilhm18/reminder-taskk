@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   HelpCircle,
   Plus,
@@ -24,8 +24,9 @@ import {
   BarChart2,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { QuestionBankItem, QuestionItem, QuestionType, QuizStatus, QuizSubmission } from '../../types';
+import { QuestionBankItem, QuestionItem, QuestionType, QuizStatus, QuizSubmission, LiveQuiz, LiveQuizResponse } from '../../types';
 import { getTerminology, resolveEducatorType } from '../../utils/terminology';
+import { playNotificationSound } from '../../utils/notification';
 
 export const QuestionBankAdminView: React.FC = () => {
   const {
@@ -38,6 +39,12 @@ export const QuestionBankAdminView: React.FC = () => {
     deleteQuestionBank,
     showToast,
     currentUser,
+    liveQuizzes,
+    liveQuizResponses,
+    createLiveQuiz,
+    updateLiveQuizStatus,
+    nextLiveQuizQuestion,
+    deleteLiveQuiz,
   } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
@@ -65,6 +72,10 @@ export const QuestionBankAdminView: React.FC = () => {
   const [viewingSubmission, setViewingSubmission] = useState<QuizSubmission | null>(null);
   const [editingQuiz, setEditingQuiz] = useState<QuestionBankItem | null>(null);
 
+  // Live Quiz States
+  const [activeLiveQuiz, setActiveLiveQuiz] = useState<LiveQuiz | null>(null);
+  const [showLiveStats, setShowLiveStats] = useState(false);
+
   // Form State for Creating / Editing Question Bank
   const [formTitle, setFormTitle] = useState('');
   const [formSubject, setFormSubject] = useState('');
@@ -86,6 +97,32 @@ export const QuestionBankAdminView: React.FC = () => {
       points: 10,
     },
   ]);
+
+  // Reconnect to active live quiz if present
+  useEffect(() => {
+    const classId = currentClass?.id || currentUser?.classId || '';
+    const active = liveQuizzes.find((l) => l.classId === classId && l.status !== 'ended');
+    if (active && !activeLiveQuiz) {
+      setActiveLiveQuiz(active);
+    } else if (!active && activeLiveQuiz) {
+      setActiveLiveQuiz(null);
+    } else if (active && activeLiveQuiz) {
+      // Sync status
+      if (active.status !== activeLiveQuiz.status || active.currentQuestionIndex !== activeLiveQuiz.currentQuestionIndex) {
+        setActiveLiveQuiz(active);
+      }
+    }
+  }, [liveQuizzes, currentClass, currentUser, activeLiveQuiz]);
+
+  const handleStartLiveQuiz = async (quiz: QuestionBankItem) => {
+    try {
+      const live = await createLiveQuiz(quiz.id, quiz.title);
+      setActiveLiveQuiz(live);
+      setShowLiveStats(false);
+    } catch (err) {
+      showToast('Gagal memulai kuis live.', 'warn');
+    }
+  };
 
   // Open Create Modal
   const handleOpenCreateModal = () => {
@@ -534,6 +571,16 @@ export const QuestionBankAdminView: React.FC = () => {
 
                 {/* Card Actions */}
                 <div className="space-y-2 pt-2 border-t border-[#261d47]">
+                  {/* Live Quiz Launcher */}
+                  <button
+                    type="button"
+                    onClick={() => handleStartLiveQuiz(quiz)}
+                    className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/20 active:scale-95"
+                  >
+                    <Sparkles className="w-4 h-4 text-amber-300 animate-pulse stroke-[2.5]" />
+                    <span>Mulai Kuis Live (RemindQuiz Live) 🎙️</span>
+                  </button>
+
                   {/* Primary Toggle: Buka vs Sembunyikan */}
                   <button
                     type="button"
@@ -1259,6 +1306,543 @@ export const QuestionBankAdminView: React.FC = () => {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================== */}
+      {/* REMINDQUIZ LIVE - TEACHER DASHBOARD OVERLAY          */}
+      {/* ==================================================== */}
+      {activeLiveQuiz && (
+        <LiveQuizTeacherDashboard
+          activeLiveQuiz={activeLiveQuiz}
+          setActiveLiveQuiz={setActiveLiveQuiz}
+          showLiveStats={showLiveStats}
+          setShowLiveStats={setShowLiveStats}
+          liveQuizResponses={liveQuizResponses}
+          updateLiveQuizStatus={updateLiveQuizStatus}
+          nextLiveQuizQuestion={nextLiveQuizQuestion}
+          deleteLiveQuiz={deleteLiveQuiz}
+          questionBanks={questionBanks}
+          showToast={showToast}
+          submitQuizAnswers={useApp().submitQuizAnswers}
+        />
+      )}
+    </div>
+  );
+};
+
+interface LiveQuizTeacherDashboardProps {
+  activeLiveQuiz: LiveQuiz;
+  setActiveLiveQuiz: (val: LiveQuiz | null) => void;
+  showLiveStats: boolean;
+  setShowLiveStats: (val: boolean) => void;
+  liveQuizResponses: LiveQuizResponse[];
+  updateLiveQuizStatus: (id: string, status: 'waiting' | 'active' | 'ended') => Promise<void>;
+  nextLiveQuizQuestion: (id: string, newIndex: number) => Promise<void>;
+  deleteLiveQuiz: (id: string) => Promise<void>;
+  questionBanks: QuestionBankItem[];
+  showToast: (msg: string, type: 'info' | 'success' | 'warn') => void;
+  submitQuizAnswers: any;
+}
+
+const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
+  activeLiveQuiz,
+  setActiveLiveQuiz,
+  showLiveStats,
+  setShowLiveStats,
+  liveQuizResponses,
+  updateLiveQuizStatus,
+  nextLiveQuizQuestion,
+  deleteLiveQuiz,
+  questionBanks,
+  showToast,
+  submitQuizAnswers,
+}) => {
+  const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
+
+  // Finding the quiz data
+  const quiz = questionBanks.find((q) => q.id === activeLiveQuiz.quizId);
+  
+  // Real-time responses submitted for the current active question index
+  const currentAnswers = liveQuizResponses.filter(
+    (r) => r.liveQuizId === activeLiveQuiz.id && r.questionIndex === activeLiveQuiz.currentQuestionIndex
+  );
+  
+  // Connected students (in lobby) have questionIndex === -1
+  const lobbyStudents = liveQuizResponses.filter(
+    (r) => r.liveQuizId === activeLiveQuiz.id && r.questionIndex === -1
+  );
+
+  // Active question info
+  const currentQuestion = quiz?.questions?.[activeLiveQuiz.currentQuestionIndex];
+  const isLastQuestion = quiz ? activeLiveQuiz.currentQuestionIndex >= quiz.questions.length - 1 : true;
+
+  // Real-time option counts for rendering bar charts
+  const optionCounts = [0, 0, 0, 0];
+  currentAnswers.forEach((ans) => {
+    if (ans.selectedOptionIndex !== undefined && ans.selectedOptionIndex >= 0 && ans.selectedOptionIndex < 4) {
+      optionCounts[ans.selectedOptionIndex]++;
+    }
+  });
+
+  // Calculate real-time live Leaderboard scores (sum of pointsEarned)
+  const studentScores: Record<string, { name: string; score: number; answersCount: number }> = {};
+  
+  // Pre-fill with lobby students so everyone in the room is listed
+  lobbyStudents.forEach((student) => {
+    studentScores[student.memberId] = {
+      name: student.memberName,
+      score: 0,
+      answersCount: 0,
+    };
+  });
+
+  // Sum up points for all responses
+  liveQuizResponses
+    .filter((r) => r.liveQuizId === activeLiveQuiz.id && r.questionIndex >= 0)
+    .forEach((res) => {
+      if (!studentScores[res.memberId]) {
+        studentScores[res.memberId] = {
+          name: res.memberName,
+          score: 0,
+          answersCount: 0,
+        };
+      }
+      studentScores[res.memberId].score += res.pointsEarned || 0;
+      studentScores[res.memberId].answersCount++;
+    });
+
+  const leaderboard = Object.entries(studentScores)
+    .map(([id, data]) => ({ id, ...data }))
+    .sort((a, b) => b.score - a.score);
+
+  const handleStartQuiz = async () => {
+    await updateLiveQuizStatus(activeLiveQuiz.id, 'active');
+    showToast('Kuis live resmi dimulai! Semoga sukses untuk para siswa! 🚀', 'success');
+  };
+
+  const handleNextQuestion = async () => {
+    if (isLastQuestion) {
+      await updateLiveQuizStatus(activeLiveQuiz.id, 'ended');
+      showToast('Kuis selesai! Mari kita lihat sang juara di podium! 🏆', 'success');
+    } else {
+      await nextLiveQuizQuestion(activeLiveQuiz.id, activeLiveQuiz.currentQuestionIndex + 1);
+      setShowLiveStats(false);
+    }
+  };
+
+  const handleRevealStats = () => {
+    setShowLiveStats(true);
+    playNotificationSound('success');
+  };
+
+  const handleSaveToGradebook = async () => {
+    if (!quiz) return;
+    try {
+      // Loop through participating students and submit their final scores to normal submissions
+      for (const entry of leaderboard) {
+        const studentResponses = liveQuizResponses.filter(
+          (r) => r.liveQuizId === activeLiveQuiz.id && r.memberId === entry.id && r.questionIndex >= 0
+        );
+        const submissionAnswers = quiz.questions.map((q, idx) => {
+          const matched = studentResponses.find((r) => r.questionIndex === idx);
+          return {
+            questionId: q.id,
+            type: q.type,
+            selectedOptionIndex: matched?.selectedOptionIndex,
+            essayAnswerText: '',
+            isCorrect: matched?.isCorrect,
+            pointsEarned: matched?.pointsEarned || 0,
+          };
+        });
+
+        // We can craft a standard QuizSubmission on behalf of the student
+        await submitQuizAnswers(quiz.id, submissionAnswers, 0); // Saves globally
+      }
+      showToast('Seluruh nilai kuis live berhasil diintegrasikan ke Rekap Tugas Kelas! 💾', 'success');
+      await deleteLiveQuiz(activeLiveQuiz.id);
+      setActiveLiveQuiz(null);
+    } catch (err) {
+      showToast('Gagal merekam nilai. Silakan coba lagi.', 'warn');
+    }
+  };
+
+  const handleForceClose = () => {
+    setIsConfirmExitOpen(true);
+  };
+
+  const handleConfirmExit = async () => {
+    await deleteLiveQuiz(activeLiveQuiz.id);
+    setActiveLiveQuiz(null);
+    setIsConfirmExitOpen(false);
+  };
+
+  if (!quiz) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 bg-[#0c081e] text-white flex flex-col overflow-y-auto animate-in fade-in zoom-in duration-300">
+      {/* Background neon glows */}
+      <div className="absolute top-10 left-10 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-10 right-10 w-96 h-96 bg-pink-600/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Top Header */}
+      <header className="relative z-10 px-6 py-4 bg-[#140e2d] border-b border-[#2d1e57] flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/30 text-purple-400 flex items-center justify-center font-black animate-pulse">
+            🎙️
+          </div>
+          <div>
+            <span className="text-[10px] font-black text-pink-400 uppercase tracking-widest block">REMINDQUIZ LIVE</span>
+            <h2 className="text-sm sm:text-base font-black text-white">{quiz.title}</h2>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <span className="px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-bold font-mono">
+            📌 PIN: {quiz.id.substring(3, 7).toUpperCase()}
+          </span>
+          <button
+            type="button"
+            onClick={handleForceClose}
+            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/25 border border-red-500/25 text-red-400 transition-colors cursor-pointer"
+            title="Tutup Sesi"
+          >
+            <X className="w-4 h-4 stroke-[3]" />
+          </button>
+        </div>
+      </header>
+
+      {/* Main Panel Content */}
+      <main className="relative z-10 flex-1 p-6 flex flex-col justify-center max-w-5xl w-full mx-auto gap-6">
+        
+        {/* LOBBY STATUS: Waiting for students to join */}
+        {activeLiveQuiz.status === 'waiting' && (
+          <div className="space-y-6 text-center animate-in fade-in slide-in-from-bottom-6 duration-300">
+            <div className="space-y-2">
+              <h1 className="text-3xl sm:text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-pink-400 to-purple-400 animate-pulse tracking-tight">
+                Menunggu Siswa Bergabung...
+              </h1>
+              <p className="text-sm sm:text-base text-slate-300 max-w-lg mx-auto">
+                Beri tahu para siswa kelas untuk masuk ke menu <strong className="text-purple-300">Bank Soal &amp; Ujian</strong> lalu klik tombol gabung kuis live!
+              </p>
+            </div>
+
+            {/* Giant Connected Counter */}
+            <div className="inline-flex flex-col items-center p-6 sm:p-8 rounded-3xl bg-[#1a133d] border-2 border-[#3d2179] shadow-2xl">
+              <div className="text-5xl sm:text-7xl font-black text-pink-400 animate-bounce">
+                {lobbyStudents.length}
+              </div>
+              <span className="text-xs sm:text-sm font-black text-slate-300 uppercase tracking-widest mt-2">SISWA TERHUBUNG</span>
+            </div>
+
+            {/* Connected Students List Grid */}
+            <div className="space-y-3">
+              <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">Daftar Ruang Tunggu</h3>
+              {lobbyStudents.length === 0 ? (
+                <div className="py-8 text-slate-500 text-xs italic">Belum ada siswa yang masuk ke lobby...</div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3 max-h-48 overflow-y-auto p-2">
+                  {lobbyStudents.map((stud) => (
+                    <div
+                      key={stud.id}
+                      className="p-3 rounded-2xl bg-[#1e1742] border border-[#37236d] text-center font-bold text-xs truncate text-white animate-in zoom-in duration-300 hover:scale-105 transition-transform"
+                    >
+                      🎭 {stud.memberName}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Start Button */}
+            <div className="pt-4">
+              <button
+                type="button"
+                onClick={handleStartQuiz}
+                disabled={lobbyStudents.length === 0}
+                className="px-8 py-4 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 disabled:opacity-40 disabled:cursor-not-allowed text-white font-black text-base shadow-xl shadow-emerald-500/25 transition-all transform active:scale-95 cursor-pointer"
+              >
+                MULAI KUIS SEKARANG 🚀
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ACTIVE STATUS: Quiz is running */}
+        {activeLiveQuiz.status === 'active' && currentQuestion && (
+          <div className="space-y-6 animate-in zoom-in-95 duration-300 flex-1 flex flex-col justify-between">
+            {/* Question Header & Counter */}
+            <div className="text-center space-y-2">
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-purple-500/15 border border-purple-500/30 text-purple-300 text-xs font-bold">
+                <span>Soal {activeLiveQuiz.currentQuestionIndex + 1} dari {quiz.questions.length}</span>
+              </div>
+              <h1 className="text-xl sm:text-2xl font-black text-white leading-relaxed">
+                {currentQuestion.questionText}
+              </h1>
+            </div>
+
+            {/* Response Statistics Card */}
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
+              
+              {/* Option Distribution Bars */}
+              <div className="md:col-span-8 p-5 sm:p-6 rounded-3xl bg-[#140e2b] border border-[#2d1e57] space-y-4">
+                <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
+                  {showLiveStats ? 'Distribusi Jawaban Siswa 📊' : 'Pilihan Jawaban'}
+                </h3>
+                
+                <div className="space-y-3">
+                  {['A', 'B', 'C', 'D'].map((lbl, idx) => {
+                    const optText = currentQuestion.options?.[idx] || '';
+                    const count = optionCounts[idx];
+                    const percentage = currentAnswers.length > 0 ? Math.round((count / currentAnswers.length) * 100) : 0;
+                    const isCorrect = currentQuestion.correctOptionIndex === idx;
+
+                    // Option branding colors (Kahoot style!)
+                    const colors = [
+                      'bg-red-500/20 border-red-500/40 text-red-300',
+                      'bg-blue-500/20 border-blue-500/40 text-blue-300',
+                      'bg-amber-500/20 border-amber-500/40 text-amber-300',
+                      'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
+                    ];
+
+                    const barColors = [
+                      'bg-red-500',
+                      'bg-blue-500',
+                      'bg-amber-500',
+                      'bg-emerald-500',
+                    ];
+
+                    return (
+                      <div key={idx} className="space-y-1.5">
+                        <div className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between ${
+                          showLiveStats && isCorrect
+                            ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg shadow-emerald-500/10'
+                            : showLiveStats
+                            ? 'bg-[#181335]/40 border-[#2d2252]/40 opacity-55'
+                            : colors[idx]
+                        }`}>
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center font-black">
+                              {lbl}
+                            </span>
+                            <span className="truncate">{optText}</span>
+                          </div>
+                          {showLiveStats && (
+                            <div className="flex items-center gap-2 shrink-0 font-mono">
+                              <span>{count} Siswa ({percentage}%)</span>
+                              {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Bar Distribution */}
+                        {showLiveStats && (
+                          <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-1000 ${isCorrect ? 'bg-emerald-500' : barColors[idx]}`}
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Connected response count wheel */}
+              <div className="md:col-span-4 flex flex-col items-center justify-center p-6 rounded-3xl bg-[#1b123d] border border-[#3b2374] text-center shadow-lg">
+                <div className="text-4xl sm:text-5xl font-black text-pink-400">
+                  {currentAnswers.length}
+                </div>
+                <div className="text-[10px] sm:text-xs font-bold text-slate-300 uppercase tracking-widest mt-2">
+                  SISWA TELAH MENJAWAB
+                </div>
+                <div className="text-xs text-slate-400 mt-1 font-mono">
+                  Lobby: {lobbyStudents.length} Siswa
+                </div>
+
+                {/* Show Answers/Leaderboard trigger */}
+                <div className="mt-5 w-full">
+                  {!showLiveStats ? (
+                    <button
+                      type="button"
+                      onClick={handleRevealStats}
+                      className="w-full py-3 px-4 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-black tracking-tight transition-all active:scale-95 shadow-lg shadow-pink-500/20"
+                    >
+                      TAMPILKAN JAWABAN 📊
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleNextQuestion}
+                      className="w-full py-3 px-4 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-black tracking-tight transition-all active:scale-95 shadow-lg shadow-purple-500/20"
+                    >
+                      {isLastQuestion ? 'SELESAIKAN KUIS 🏁' : 'PERTANYAAN BERIKUTNYA ➡️'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Current Top 5 Leaderboard on running screen */}
+            {showLiveStats && (
+              <div className="p-4 rounded-3xl bg-[#110e24] border border-[#2b2052] space-y-3">
+                <h3 className="text-xs font-black text-center text-amber-400 uppercase tracking-widest flex items-center justify-center gap-2">
+                  ⭐ LIVE LEADERBOARD (KLASEMEN SEMENTARA) ⭐
+                </h3>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
+                  {leaderboard.slice(0, 5).map((stud, idx) => {
+                    const podiumColors = [
+                      'border-amber-400/50 bg-amber-500/15 text-amber-300',
+                      'border-slate-400/50 bg-slate-500/15 text-slate-300',
+                      'border-amber-700/50 bg-amber-800/15 text-amber-500',
+                      'border-[#2a1d5c] bg-[#1a133f] text-slate-300',
+                      'border-[#2a1d5c] bg-[#1a133f] text-slate-300',
+                    ];
+
+                    return (
+                      <div
+                        key={stud.id}
+                        className={`p-3 rounded-2xl border flex items-center justify-between gap-3 text-xs font-bold ${podiumColors[idx]}`}
+                      >
+                        <div className="flex items-center gap-1.5 truncate">
+                          <span className="font-mono font-black">{idx + 1}.</span>
+                          <span className="truncate">{stud.name}</span>
+                        </div>
+                        <span className="font-mono text-pink-400 shrink-0">{stud.score} Poin</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ENDED STATUS: Show Podium */}
+        {activeLiveQuiz.status === 'ended' && (
+          <div className="space-y-6 text-center animate-in zoom-in duration-300">
+            <h1 className="text-4xl sm:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-amber-400 via-pink-400 to-purple-400 tracking-tight animate-bounce">
+              🏆 PODIUM JUARA 🏆
+            </h1>
+
+            {/* Visual Podium Graphic (3 Columns: Silver, Gold, Bronze) */}
+            <div className="flex items-end justify-center gap-3 sm:gap-6 max-w-md mx-auto pt-12 pb-6">
+              
+              {/* 2nd Place (Silver) */}
+              {leaderboard[1] && (
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-sm font-black text-slate-300 truncate max-w-[100px]" title={leaderboard[1].name}>
+                    🥈 {leaderboard[1].name}
+                  </div>
+                  <span className="text-[10px] text-slate-400">{leaderboard[1].score} Poin</span>
+                  <div className="w-full h-24 rounded-t-2xl bg-gradient-to-t from-slate-600/30 to-slate-400/40 border-t-2 border-slate-300 flex items-center justify-center font-black text-slate-300 text-lg shadow-xl">
+                    2
+                  </div>
+                </div>
+              )}
+
+              {/* 1st Place (Gold) */}
+              {leaderboard[0] && (
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-base font-black text-amber-300 truncate max-w-[120px] animate-pulse" title={leaderboard[0].name}>
+                    🥇 {leaderboard[0].name}
+                  </div>
+                  <span className="text-xs text-amber-400 font-mono font-black">{leaderboard[0].score} Poin</span>
+                  <div className="w-full h-32 rounded-t-2xl bg-gradient-to-t from-amber-600/30 to-amber-400/40 border-t-2 border-amber-400 flex items-center justify-center font-black text-amber-400 text-2xl shadow-2xl relative">
+                    <div className="absolute -top-4 text-xl">👑</div>
+                    1
+                  </div>
+                </div>
+              )}
+
+              {/* 3rd Place (Bronze) */}
+              {leaderboard[2] && (
+                <div className="flex flex-col items-center gap-2 flex-1">
+                  <div className="text-sm font-black text-amber-600 truncate max-w-[100px]" title={leaderboard[2].name}>
+                    🥉 {leaderboard[2].name}
+                  </div>
+                  <span className="text-[10px] text-amber-700">{leaderboard[2].score} Poin</span>
+                  <div className="w-full h-16 rounded-t-2xl bg-gradient-to-t from-amber-800/30 to-amber-700/40 border-t-2 border-amber-700 flex items-center justify-center font-black text-amber-600 text-base shadow-lg">
+                    3
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Rest of the Leaderboard Table */}
+            {leaderboard.length > 3 && (
+              <div className="max-w-md mx-auto p-4 rounded-3xl bg-[#110e24] border border-[#2d1f56] space-y-2 max-h-40 overflow-y-auto">
+                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-2">Peringkat Lainnya</h3>
+                {leaderboard.slice(3).map((stud, idx) => (
+                  <div key={stud.id} className="flex items-center justify-between text-xs font-bold text-slate-300 px-2.5 py-1.5 rounded-xl bg-white/5">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="font-mono text-slate-400">{idx + 4}.</span>
+                      <span className="truncate">{stud.name}</span>
+                    </div>
+                    <span>{stud.score} Poin</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Action Buttons to save gradebook */}
+            <div className="pt-4 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                type="button"
+                onClick={handleSaveToGradebook}
+                className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-pink-500 to-purple-600 hover:from-pink-400 hover:to-purple-500 text-white font-black text-xs sm:text-sm shadow-xl shadow-pink-500/25 flex items-center gap-2 active:scale-95 transition-all cursor-pointer"
+              >
+                <span>Simpan Nilai ke Tugas Kelas 💾</span>
+              </button>
+              
+              <button
+                type="button"
+                onClick={async () => {
+                  await deleteLiveQuiz(activeLiveQuiz.id);
+                  setActiveLiveQuiz(null);
+                }}
+                className="px-6 py-3.5 rounded-2xl bg-[#1e173e] hover:bg-[#2b2158] border border-[#3b2374] text-slate-300 font-bold text-xs sm:text-sm active:scale-95 transition-all cursor-pointer"
+              >
+                Keluar Tanpa Menyimpan ❌
+              </button>
+            </div>
+          </div>
+        )}
+      </main>
+
+      {/* Sleek Custom Confirm Modal instead of native browser popup to prevent iFrame blockages */}
+      {isConfirmExitOpen && (
+        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="w-full max-w-sm p-6 rounded-3xl bg-[#140e2d] border border-[#3c256d] text-center space-y-4 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 text-xl mx-auto">
+              ⚠️
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-base font-black text-white">Matikan Sesi Kuis Live?</h3>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                Apakah Anda yakin ingin mematikan sesi kuis live ini? Seluruh riwayat jawaban real-time siswa saat ini akan dihapus permanen.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                onClick={handleConfirmExit}
+                className="py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black transition-all cursor-pointer shadow-lg shadow-red-600/20 active:scale-95"
+              >
+                Ya, Matikan Kuis
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsConfirmExitOpen(false)}
+                className="py-2.5 rounded-xl bg-[#1e173e] hover:bg-[#2c2058] border border-[#3b2374] text-slate-300 text-xs font-bold transition-all cursor-pointer active:scale-95"
+              >
+                Batal
+              </button>
+            </div>
           </div>
         </div>
       )}

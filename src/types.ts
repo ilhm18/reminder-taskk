@@ -402,3 +402,30 @@ export interface ForumPost {
   createdAt: string;
 }
 
+// RemindQuiz Live
+export interface LiveQuiz {
+  id: string;
+  classId: string;
+  quizId: string;
+  title: string;
+  status: 'waiting' | 'active' | 'ended';
+  currentQuestionIndex: number;
+  activeQuestionEndsAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface LiveQuizResponse {
+  id: string;
+  liveQuizId: string;
+  questionIndex: number;
+  memberId: string;
+  memberName: string;
+  selectedOptionIndex?: number;
+  isCorrect?: boolean;
+  pointsEarned?: number;
+  responseTimeMs?: number;
+  createdAt: string;
+}
+
+

@@ -10,7 +10,7 @@ import {
   INITIAL_QUIZ_SUBMISSIONS,
 } from '../services/mockData';
 import { getStoredSupabaseConfig, getSupabaseClient } from '../services/supabase';
-import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, EducatorType, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod, ForumPost, ForumCategory, ForumComment } from '../types';
+import { ClassItem, ClassMaterial, NotificationItem, Task, TaskSubmission, User, UserRole, EducatorType, ActivityLogItem, ScheduleItem, DayOfWeek, AnonymousMessage, AnonymousReply, FeedbackItem, OwnerChatItem, SystemSettings, ClassAccessLog, ClassChatItem, QuestionBankItem, QuizSubmission, QuizSubmissionAnswer, QuizStatus, AttendanceSession, AttendanceRecord, AttendanceStatus, AttendanceVerificationMethod, ForumPost, ForumCategory, ForumComment, LiveQuiz, LiveQuizResponse } from '../types';
 import {
   formatIndonesianDate,
   getTaskDeadlineStatus,
@@ -176,6 +176,15 @@ interface AppContextType {
   toggleQuestionBankStatus: (id: string) => Promise<void>;
   deleteQuestionBank: (id: string) => Promise<void>;
   submitQuizAnswers: (quizId: string, answers: QuizSubmissionAnswer[], durationSecondsUsed?: number) => Promise<QuizSubmission>;
+
+  // RemindQuiz Live
+  liveQuizzes: LiveQuiz[];
+  liveQuizResponses: LiveQuizResponse[];
+  createLiveQuiz: (quizId: string, title: string) => Promise<LiveQuiz>;
+  updateLiveQuizStatus: (id: string, status: 'waiting' | 'active' | 'ended') => Promise<void>;
+  nextLiveQuizQuestion: (id: string, newIndex: number) => Promise<void>;
+  submitLiveQuizResponse: (liveQuizId: string, questionIndex: number, selectedOptionIndex: number, isCorrect: boolean, pointsEarned: number, responseTimeMs: number) => Promise<void>;
+  deleteLiveQuiz: (id: string) => Promise<void>;
 
   // Absensi & Presensi Digital Kelas
   attendanceSessions: AttendanceSession[];
@@ -477,6 +486,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       localStorage.setItem(STORAGE_KEYS.QUIZ_SUBMISSIONS, JSON.stringify(quizSubmissions));
     } catch {}
   }, [quizSubmissions]);
+
+  // RemindQuiz Live State
+  const [liveQuizzes, setLiveQuizzes] = useState<LiveQuiz[]>([]);
+  const [liveQuizResponses, setLiveQuizResponses] = useState<LiveQuizResponse[]>([]);
 
   // Absensi & Presensi Digital State
   const [attendanceSessions, setAttendanceSessions] = useState<AttendanceSession[]>(() => {
@@ -1274,6 +1287,49 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       } catch (err) {
         console.warn('Sync quiz_submissions table skipped or failed:', err);
+      }
+
+      // Sync live_quizzes from Supabase
+      try {
+        const lqRes = await client.from('live_quizzes').select('*').order('created_at', { ascending: false });
+        if (Array.isArray(lqRes.data)) {
+          const mappedLQs: LiveQuiz[] = lqRes.data.map((lq: any) => ({
+            id: lq.id,
+            classId: lq.class_id,
+            quizId: lq.quiz_id,
+            title: lq.title,
+            status: lq.status as any,
+            currentQuestionIndex: lq.current_question_index || 0,
+            activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+            createdAt: lq.created_at,
+            updatedAt: lq.updated_at,
+          }));
+          setLiveQuizzes(mappedLQs);
+        }
+      } catch (err) {
+        console.warn('Sync live_quizzes table skipped or failed:', err);
+      }
+
+      // Sync live_quiz_responses from Supabase
+      try {
+        const lqrRes = await client.from('live_quiz_responses').select('*').order('created_at', { ascending: false });
+        if (Array.isArray(lqrRes.data)) {
+          const mappedLQRs: LiveQuizResponse[] = lqrRes.data.map((lqr: any) => ({
+            id: lqr.id,
+            liveQuizId: lqr.live_quiz_id,
+            questionIndex: lqr.question_index,
+            memberId: lqr.member_id,
+            memberName: lqr.member_name,
+            selectedOptionIndex: lqr.selected_option_index !== null ? Number(lqr.selected_option_index) : undefined,
+            isCorrect: lqr.is_correct || false,
+            pointsEarned: lqr.points_earned || 0,
+            responseTimeMs: lqr.response_time_ms || 0,
+            createdAt: lqr.created_at,
+          }));
+          setLiveQuizResponses(mappedLQRs);
+        }
+      } catch (err) {
+        console.warn('Sync live_quiz_responses table skipped or failed:', err);
       }
 
       // Sync attendance_sessions from Supabase
@@ -2196,6 +2252,87 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
             setForumPosts((prev) => prev.filter((x) => x.id !== oldId));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'live_quizzes' },
+        (payload) => {
+          if (payload.eventType === 'INSERT') {
+            const lq = payload.new as any;
+            const newLq: LiveQuiz = {
+              id: lq.id,
+              classId: lq.class_id,
+              quizId: lq.quiz_id,
+              title: lq.title,
+              status: lq.status as any,
+              currentQuestionIndex: lq.current_question_index || 0,
+              activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+              createdAt: lq.created_at,
+              updatedAt: lq.updated_at,
+            };
+            setLiveQuizzes((prev) => [newLq, ...prev.filter((x) => x.id !== newLq.id)]);
+
+            // Sound chime and notify if member is in that class
+            const activeClassId = currentClass?.id || currentUser?.classId;
+            if (newLq.classId === activeClassId && currentRole === 'member' && newLq.status === 'waiting') {
+              playNotificationSoundOnce(newLq.id, 'chime');
+              showToast(`🎙️ Kuis Interaktif Live Dimulai: ${newLq.title}! Silakan masuk menu Ujian.`, 'info');
+            }
+          } else if (payload.eventType === 'UPDATE') {
+            const lq = payload.new as any;
+            const updatedLq: LiveQuiz = {
+              id: lq.id,
+              classId: lq.class_id,
+              quizId: lq.quiz_id,
+              title: lq.title,
+              status: lq.status as any,
+              currentQuestionIndex: lq.current_question_index || 0,
+              activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+              createdAt: lq.created_at,
+              updatedAt: lq.updated_at,
+            };
+            setLiveQuizzes((prev) =>
+              prev.map((x) => (x.id === lq.id ? updatedLq : x))
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as any).id;
+            setLiveQuizzes((prev) => prev.filter((x) => x.id !== oldId));
+            setLiveQuizResponses((prev) => prev.filter((x) => x.liveQuizId !== oldId));
+          }
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'live_quiz_responses' },
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            const lqr = payload.new as any;
+            const newLqr: LiveQuizResponse = {
+              id: lqr.id,
+              liveQuizId: lqr.live_quiz_id,
+              questionIndex: lqr.question_index,
+              memberId: lqr.member_id,
+              memberName: lqr.member_name,
+              selectedOptionIndex: lqr.selected_option_index !== null ? Number(lqr.selected_option_index) : undefined,
+              isCorrect: lqr.is_correct || false,
+              pointsEarned: lqr.points_earned || 0,
+              responseTimeMs: lqr.response_time_ms || 0,
+              createdAt: lqr.created_at,
+            };
+            setLiveQuizResponses((prev) => [
+              newLqr,
+              ...prev.filter((x) => x.id !== newLqr.id && !(x.liveQuizId === newLqr.liveQuizId && x.memberId === newLqr.memberId && x.questionIndex === newLqr.questionIndex)),
+            ]);
+
+            // Notify admin with beep when student answers
+            if (currentRole === 'admin' || currentRole === 'owner') {
+              playNotificationSound('beep');
+            }
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = (payload.old as any).id;
+            setLiveQuizResponses((prev) => prev.filter((x) => x.id !== oldId));
           }
         }
       )
@@ -4922,6 +5059,155 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newSub;
   };
 
+  // RemindQuiz Live Actions
+  const createLiveQuiz = async (quizId: string, title: string): Promise<LiveQuiz> => {
+    const newLQ: LiveQuiz = {
+      id: 'lq-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      classId: currentClass?.id || currentUser?.classId || 'class-default',
+      quizId,
+      title,
+      status: 'waiting',
+      currentQuestionIndex: 0,
+      createdAt: new Date().toISOString(),
+    };
+
+    setLiveQuizzes((prev) => [newLQ, ...prev.filter((x) => x.id !== newLQ.id)]);
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').insert({
+          id: newLQ.id,
+          class_id: newLQ.classId,
+          quiz_id: newLQ.quizId,
+          title: newLQ.title,
+          status: newLQ.status,
+          current_question_index: newLQ.currentQuestionIndex,
+          created_at: newLQ.createdAt,
+        });
+      } catch (err) {
+        console.warn('Supabase live_quizzes insert error:', err);
+      }
+    }
+
+    addActivityLog(
+      currentUser?.name || 'Admin',
+      'admin',
+      'Memulai Kuis Live',
+      `Kuis Live "${newLQ.title}" berhasil diluncurkan ke kelas.`,
+      'task'
+    );
+
+    sendCustomNotification(
+      `🎙️ Kuis Live Dimulai: ${newLQ.title}`,
+      `Ayo bergabung ke Kuis Live "${newLQ.title}" sekarang!`,
+      'broadcast',
+      newLQ.classId,
+      undefined,
+      'member'
+    );
+
+    return newLQ;
+  };
+
+  const updateLiveQuizStatus = async (id: string, status: 'waiting' | 'active' | 'ended') => {
+    setLiveQuizzes((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, status, updatedAt: new Date().toISOString() } : x))
+    );
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').update({
+          status,
+          updated_at: new Date().toISOString(),
+        }).eq('id', id);
+      } catch (err) {
+        console.warn('Supabase live_quizzes update status error:', err);
+      }
+    }
+  };
+
+  const nextLiveQuizQuestion = async (id: string, newIndex: number) => {
+    setLiveQuizzes((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, currentQuestionIndex: newIndex, updatedAt: new Date().toISOString() } : x))
+    );
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').update({
+          current_question_index: newIndex,
+          updated_at: new Date().toISOString(),
+        }).eq('id', id);
+      } catch (err) {
+        console.warn('Supabase live_quizzes next question error:', err);
+      }
+    }
+  };
+
+  const submitLiveQuizResponse = async (
+    liveQuizId: string,
+    questionIndex: number,
+    selectedOptionIndex: number,
+    isCorrect: boolean,
+    pointsEarned: number,
+    responseTimeMs: number
+  ) => {
+    const newLQR: LiveQuizResponse = {
+      id: 'lqr-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
+      liveQuizId,
+      questionIndex,
+      memberId: currentUser?.id || 'member-guest',
+      memberName: currentUser?.name || 'Siswa',
+      selectedOptionIndex,
+      isCorrect,
+      pointsEarned,
+      responseTimeMs,
+      createdAt: new Date().toISOString(),
+    };
+
+    setLiveQuizResponses((prev) => [
+      newLQR,
+      ...prev.filter((x) => !(x.liveQuizId === liveQuizId && x.memberId === newLQR.memberId && x.questionIndex === questionIndex)),
+    ]);
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quiz_responses').upsert({
+          id: newLQR.id,
+          live_quiz_id: liveQuizId,
+          question_index: questionIndex,
+          member_id: newLQR.memberId,
+          member_name: newLQR.memberName,
+          selected_option_index: selectedOptionIndex,
+          is_correct: isCorrect,
+          points_earned: pointsEarned,
+          response_time_ms: responseTimeMs,
+          created_at: newLQR.createdAt,
+        }, { onConflict: 'live_quiz_id,member_id,question_index' });
+      } catch (err) {
+        console.warn('Supabase live_quiz_responses upsert error:', err);
+      }
+    }
+  };
+
+  const deleteLiveQuiz = async (id: string) => {
+    setLiveQuizzes((prev) => prev.filter((x) => x.id !== id));
+    setLiveQuizResponses((prev) => prev.filter((x) => x.liveQuizId !== id));
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').delete().eq('id', id);
+        await client.from('live_quiz_responses').delete().eq('live_quiz_id', id);
+      } catch (err) {
+        console.warn('Supabase live_quizzes delete error:', err);
+      }
+    }
+  };
+
   // ==========================================
   // ABSENSI & PRESENSI DIGITAL KELAS (ANTI-SABOTASE)
   // ==========================================
@@ -7073,6 +7359,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleQuestionBankStatus,
         deleteQuestionBank,
         submitQuizAnswers,
+        liveQuizzes,
+        liveQuizResponses,
+        createLiveQuiz,
+        updateLiveQuizStatus,
+        nextLiveQuizQuestion,
+        submitLiveQuizResponse,
+        deleteLiveQuiz,
         attendanceSessions,
         attendanceRecords,
         createAttendanceSession,

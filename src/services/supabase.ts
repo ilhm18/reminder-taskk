@@ -561,6 +561,43 @@ ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS liked_by JSONB DEFAULT '
 ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS likes INT DEFAULT 0;
 ALTER TABLE public.forum_posts ADD COLUMN IF NOT EXISTS comments_count INT DEFAULT 0;
 
+-- 19. Buat Tabel Sesi Kuis Live (Live Quizzes)
+CREATE TABLE IF NOT EXISTS public.live_quizzes (
+  id TEXT PRIMARY KEY,
+  class_id TEXT NOT NULL REFERENCES public.classes(id) ON DELETE CASCADE,
+  quiz_id TEXT NOT NULL REFERENCES public.question_banks(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'active', 'ended')),
+  current_question_index INTEGER DEFAULT 0,
+  active_question_ends_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Kolom opsional jika tabel sudah ada sebelumnya
+ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS current_question_index INTEGER DEFAULT 0;
+ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS active_question_ends_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_live_quizzes_class ON public.live_quizzes(class_id);
+CREATE INDEX IF NOT EXISTS idx_live_quizzes_status ON public.live_quizzes(status);
+
+-- 20. Buat Tabel Respon Kuis Live (Live Quiz Responses)
+CREATE TABLE IF NOT EXISTS public.live_quiz_responses (
+  id TEXT PRIMARY KEY,
+  live_quiz_id TEXT NOT NULL REFERENCES public.live_quizzes(id) ON DELETE CASCADE,
+  question_index INTEGER NOT NULL,
+  member_id TEXT NOT NULL,
+  member_name TEXT NOT NULL,
+  selected_option_index INTEGER,
+  is_correct BOOLEAN DEFAULT false,
+  points_earned INTEGER DEFAULT 0,
+  response_time_ms INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_live_quiz_member_question UNIQUE (live_quiz_id, member_id, question_index)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_quiz_responses_quiz ON public.live_quiz_responses(live_quiz_id);
+
 -- ====================================================
 -- AKTIFKAN ROW LEVEL SECURITY (RLS) PENUH DENGAN AKSES PUBLIK
 -- ====================================================
@@ -584,6 +621,8 @@ ALTER TABLE public.quiz_submissions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.attendance_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.attendance_records ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.forum_posts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.live_quizzes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.live_quiz_responses ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Akses publik profil" ON public.profiles;
 DROP POLICY IF EXISTS "Akses publik kelas" ON public.classes;
@@ -605,6 +644,8 @@ DROP POLICY IF EXISTS "Akses publik quiz submissions" ON public.quiz_submissions
 DROP POLICY IF EXISTS "Akses publik attendance sessions" ON public.attendance_sessions;
 DROP POLICY IF EXISTS "Akses publik attendance records" ON public.attendance_records;
 DROP POLICY IF EXISTS "Akses publik forum posts" ON public.forum_posts;
+DROP POLICY IF EXISTS "Akses publik live quizzes" ON public.live_quizzes;
+DROP POLICY IF EXISTS "Akses publik live quiz responses" ON public.live_quiz_responses;
 
 CREATE POLICY "Akses publik profil" ON public.profiles FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik kelas" ON public.classes FOR ALL USING (true) WITH CHECK (true);
@@ -626,6 +667,8 @@ CREATE POLICY "Akses publik quiz submissions" ON public.quiz_submissions FOR ALL
 CREATE POLICY "Akses publik attendance sessions" ON public.attendance_sessions FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik attendance records" ON public.attendance_records FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Akses publik forum posts" ON public.forum_posts FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Akses publik live quizzes" ON public.live_quizzes FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Akses publik live quiz responses" ON public.live_quiz_responses FOR ALL USING (true) WITH CHECK (true);
 
 -- ====================================================
 -- AKTIFKAN REALTIME REPLICATION & REPLICA IDENTITY FULL
@@ -651,6 +694,8 @@ ALTER TABLE public.quiz_submissions REPLICA IDENTITY FULL;
 ALTER TABLE public.attendance_sessions REPLICA IDENTITY FULL;
 ALTER TABLE public.attendance_records REPLICA IDENTITY FULL;
 ALTER TABLE public.forum_posts REPLICA IDENTITY FULL;
+ALTER TABLE public.live_quizzes REPLICA IDENTITY FULL;
+ALTER TABLE public.live_quiz_responses REPLICA IDENTITY FULL;
 
 DO $$
 BEGIN
@@ -674,5 +719,7 @@ BEGIN
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.quiz_submissions; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.attendance_sessions; EXCEPTION WHEN duplicate_object THEN NULL; END;
   BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.attendance_records; EXCEPTION WHEN duplicate_object THEN NULL; END;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.live_quizzes; EXCEPTION WHEN duplicate_object THEN NULL; END;
+  BEGIN ALTER PUBLICATION supabase_realtime ADD TABLE public.live_quiz_responses; EXCEPTION WHEN duplicate_object THEN NULL; END;
 END $$;
 `;
