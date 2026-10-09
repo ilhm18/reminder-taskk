@@ -1216,18 +1216,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const settingsRes = await client.from('system_settings').select('*').eq('id', 'global_config').maybeSingle();
         if (settingsRes.data) {
           const s = settingsRes.data;
+          let localSaved: Partial<SystemSettings> = {};
+          try {
+            const raw = localStorage.getItem('remindtask_global_v5_system_settings');
+            if (raw) localSaved = JSON.parse(raw);
+          } catch {}
+
           const mapped: SystemSettings = {
-            isMaintenance: s.is_maintenance ?? false,
-            maintenanceTitle: s.maintenance_title || defaultSystemSettings.maintenanceTitle,
-            maintenanceMessage: s.maintenance_message || defaultSystemSettings.maintenanceMessage,
-            maintenanceEstimate: s.maintenance_estimate || defaultSystemSettings.maintenanceEstimate,
-            isAiMaintenance: s.is_ai_maintenance ?? true,
-            aiMaintenanceTitle: s.ai_maintenance_title || defaultSystemSettings.aiMaintenanceTitle,
-            aiMaintenanceMessage: s.ai_maintenance_message || defaultSystemSettings.aiMaintenanceMessage,
-            aiProgressPercent: s.ai_progress_percent ?? 85,
-            adminFeatureMaintenance: s.admin_feature_maintenance || {},
-            memberFeatureMaintenance: s.member_feature_maintenance || {},
-            featureMaintenanceCustomMessages: s.feature_maintenance_custom_messages || {},
+            isMaintenance: s.is_maintenance ?? (localSaved.isMaintenance ?? false),
+            maintenanceTitle: s.maintenance_title || localSaved.maintenanceTitle || defaultSystemSettings.maintenanceTitle,
+            maintenanceMessage: s.maintenance_message || localSaved.maintenanceMessage || defaultSystemSettings.maintenanceMessage,
+            maintenanceEstimate: s.maintenance_estimate || localSaved.maintenanceEstimate || defaultSystemSettings.maintenanceEstimate,
+            isAiMaintenance: s.is_ai_maintenance ?? (localSaved.isAiMaintenance ?? true),
+            aiMaintenanceTitle: s.ai_maintenance_title || localSaved.aiMaintenanceTitle || defaultSystemSettings.aiMaintenanceTitle,
+            aiMaintenanceMessage: s.ai_maintenance_message || localSaved.aiMaintenanceMessage || defaultSystemSettings.aiMaintenanceMessage,
+            aiProgressPercent: s.ai_progress_percent ?? (localSaved.aiProgressPercent ?? 85),
+            adminFeatureMaintenance: (s.admin_feature_maintenance && typeof s.admin_feature_maintenance === 'object')
+              ? s.admin_feature_maintenance
+              : (localSaved.adminFeatureMaintenance || {}),
+            memberFeatureMaintenance: (s.member_feature_maintenance && typeof s.member_feature_maintenance === 'object')
+              ? s.member_feature_maintenance
+              : (localSaved.memberFeatureMaintenance || {}),
+            featureMaintenanceCustomMessages: (s.feature_maintenance_custom_messages && typeof s.feature_maintenance_custom_messages === 'object')
+              ? s.feature_maintenance_custom_messages
+              : (localSaved.featureMaintenanceCustomMessages || {}),
           };
           setSystemSettings(mapped);
           localStorage.setItem('remindtask_global_v5_system_settings', JSON.stringify(mapped));
@@ -2125,21 +2137,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         (payload) => {
           if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
             const s = payload.new as any;
-            const mapped: SystemSettings = {
-              isMaintenance: s.is_maintenance ?? false,
-              maintenanceTitle: s.maintenance_title || defaultSystemSettings.maintenanceTitle,
-              maintenanceMessage: s.maintenance_message || defaultSystemSettings.maintenanceMessage,
-              maintenanceEstimate: s.maintenance_estimate || defaultSystemSettings.maintenanceEstimate,
-              isAiMaintenance: s.is_ai_maintenance ?? true,
-              aiMaintenanceTitle: s.ai_maintenance_title || defaultSystemSettings.aiMaintenanceTitle,
-              aiMaintenanceMessage: s.ai_maintenance_message || defaultSystemSettings.aiMaintenanceMessage,
-              aiProgressPercent: s.ai_progress_percent ?? 85,
-              adminFeatureMaintenance: s.admin_feature_maintenance || {},
-              memberFeatureMaintenance: s.member_feature_maintenance || {},
-              featureMaintenanceCustomMessages: s.feature_maintenance_custom_messages || {},
-            };
-            setSystemSettings(mapped);
-            localStorage.setItem('remindtask_global_v5_system_settings', JSON.stringify(mapped));
+            setSystemSettings((prev) => {
+              const mapped: SystemSettings = {
+                isMaintenance: s.is_maintenance ?? prev.isMaintenance ?? false,
+                maintenanceTitle: s.maintenance_title || prev.maintenanceTitle || defaultSystemSettings.maintenanceTitle,
+                maintenanceMessage: s.maintenance_message || prev.maintenanceMessage || defaultSystemSettings.maintenanceMessage,
+                maintenanceEstimate: s.maintenance_estimate || prev.maintenanceEstimate || defaultSystemSettings.maintenanceEstimate,
+                isAiMaintenance: s.is_ai_maintenance ?? prev.isAiMaintenance ?? true,
+                aiMaintenanceTitle: s.ai_maintenance_title || prev.aiMaintenanceTitle || defaultSystemSettings.aiMaintenanceTitle,
+                aiMaintenanceMessage: s.ai_maintenance_message || prev.aiMaintenanceMessage || defaultSystemSettings.aiMaintenanceMessage,
+                aiProgressPercent: s.ai_progress_percent ?? prev.aiProgressPercent ?? 85,
+                adminFeatureMaintenance: (s.admin_feature_maintenance && typeof s.admin_feature_maintenance === 'object')
+                  ? s.admin_feature_maintenance
+                  : (prev.adminFeatureMaintenance || {}),
+                memberFeatureMaintenance: (s.member_feature_maintenance && typeof s.member_feature_maintenance === 'object')
+                  ? s.member_feature_maintenance
+                  : (prev.memberFeatureMaintenance || {}),
+                featureMaintenanceCustomMessages: (s.feature_maintenance_custom_messages && typeof s.feature_maintenance_custom_messages === 'object')
+                  ? s.feature_maintenance_custom_messages
+                  : (prev.featureMaintenanceCustomMessages || {}),
+              };
+              try {
+                localStorage.setItem('remindtask_global_v5_system_settings', JSON.stringify(mapped));
+              } catch {}
+              return mapped;
+            });
           }
         }
       )

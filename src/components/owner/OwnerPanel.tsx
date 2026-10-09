@@ -381,6 +381,25 @@ export const OwnerPanel: React.FC = () => {
   const [showSqlFeatureModal, setShowSqlFeatureModal] = useState(false);
   const [copiedSqlFeature, setCopiedSqlFeature] = useState(false);
   const [isSavingFeatures, setIsSavingFeatures] = useState(false);
+
+  // Instant Feature Toggle Confirmation State
+  const [pendingToggleConfirmation, setPendingToggleConfirmation] = useState<{
+    featureId: string;
+    featureName: string;
+    role: 'admin' | 'member' | 'global_website' | 'global_ai';
+    categoryLabel?: string;
+    currentIsMaint: boolean;
+    nextIsMaint: boolean;
+  } | null>(null);
+  const [isExecutingToggle, setIsExecutingToggle] = useState(false);
+
+  // Pending Bulk Confirmation State
+  const [pendingBulkConfirmation, setPendingBulkConfirmation] = useState<{
+    role: 'global' | 'admin' | 'member' | 'all';
+    status: boolean;
+  } | null>(null);
+  const [isExecutingBulk, setIsExecutingBulk] = useState(false);
+
   const [previewFeatureData, setPreviewFeatureData] = useState<{
     name: string;
     categoryLabel: string;
@@ -420,6 +439,54 @@ export const OwnerPanel: React.FC = () => {
     }
   }, [systemSettings]);
 
+  // Eksekusi perubahan toggle fitur secara instan ke Supabase & LocalStorage
+  const executeToggleFeature = async (
+    featureId: string,
+    role: 'admin' | 'member' | 'global_website' | 'global_ai',
+    nextMaintState: boolean,
+    featureName: string
+  ) => {
+    let newAdminMaint = { ...adminFeatureMaintenance };
+    let newMemberMaint = { ...memberFeatureMaintenance };
+    let newMaintenanceForm = { ...maintenanceForm };
+
+    if (role === 'global_website') {
+      newMaintenanceForm.isMaintenance = nextMaintState;
+      setMaintenanceForm(newMaintenanceForm);
+    } else if (role === 'global_ai') {
+      newMaintenanceForm.isAiMaintenance = nextMaintState;
+      newMemberMaint.ai_tutor = nextMaintState;
+      setMaintenanceForm(newMaintenanceForm);
+      setMemberFeatureMaintenance(newMemberMaint);
+    } else if (role === 'admin') {
+      newAdminMaint[featureId] = nextMaintState;
+      setAdminFeatureMaintenance(newAdminMaint);
+    } else if (role === 'member') {
+      newMemberMaint[featureId] = nextMaintState;
+      if (featureId === 'ai_tutor') {
+        newMaintenanceForm.isAiMaintenance = nextMaintState;
+        setMaintenanceForm(newMaintenanceForm);
+      }
+      setMemberFeatureMaintenance(newMemberMaint);
+    }
+
+    // Auto-save langsung ke Supabase dan LocalStorage
+    await updateSystemSettings({
+      ...newMaintenanceForm,
+      adminFeatureMaintenance: newAdminMaint,
+      memberFeatureMaintenance: newMemberMaint,
+      featureMaintenanceCustomMessages: featureCustomMessages,
+    });
+
+    showToast(
+      nextMaintState
+        ? `Fitur "${featureName}" berhasil diset ke mode MAINTENANCE (Terkunci)!`
+        : `Fitur "${featureName}" berhasil DIAKTIFKAN kembali (Normal)!`,
+      nextMaintState ? 'warn' : 'success'
+    );
+    setPendingToggleConfirmation(null);
+  };
+
   const handleToggleAdminFeature = (featureId: string) => {
     setAdminFeatureMaintenance((prev) => ({
       ...prev,
@@ -440,66 +507,58 @@ export const OwnerPanel: React.FC = () => {
     });
   };
 
-  const handleBulkToggle = (role: 'global' | 'admin' | 'member' | 'all', status: boolean) => {
+  const handleBulkToggle = async (role: 'global' | 'admin' | 'member' | 'all', status: boolean) => {
+    let newMaintenanceForm = { ...maintenanceForm };
+    let newAdminMaint = { ...adminFeatureMaintenance };
+    let newMemberMaint = { ...memberFeatureMaintenance };
+
     if (role === 'global') {
-      setMaintenanceForm((prev) => ({
-        ...prev,
-        isMaintenance: status,
-        isAiMaintenance: status,
-      }));
-      setMemberFeatureMaintenance((prev) => ({
-        ...prev,
-        ai_tutor: status,
-      }));
-      showToast(
-        status
-          ? 'Sistem Website & AI diset ke mode MAINTENANCE (Nonaktif)!'
-          : 'Sistem Website & AI dibuka kembali ke mode NORMAL (Aktif)!',
-        status ? 'warn' : 'success'
-      );
-      return;
-    }
-    if (role === 'all') {
-      setMaintenanceForm((prev) => ({
-        ...prev,
-        isMaintenance: status,
-        isAiMaintenance: status,
-      }));
-      const updatedAdmin: Record<string, boolean> = {};
+      newMaintenanceForm.isMaintenance = status;
+      newMaintenanceForm.isAiMaintenance = status;
+      newMemberMaint.ai_tutor = status;
+      setMaintenanceForm(newMaintenanceForm);
+      setMemberFeatureMaintenance(newMemberMaint);
+    } else if (role === 'all') {
+      newMaintenanceForm.isMaintenance = status;
+      newMaintenanceForm.isAiMaintenance = status;
       ADMIN_FEATURE_MENUS.forEach((f) => {
-        updatedAdmin[f.id] = status;
+        newAdminMaint[f.id] = status;
       });
-      setAdminFeatureMaintenance(updatedAdmin);
-      const updatedMember: Record<string, boolean> = {};
       MEMBER_FEATURE_MENUS.forEach((f) => {
-        updatedMember[f.id] = status;
+        newMemberMaint[f.id] = status;
       });
-      setMemberFeatureMaintenance(updatedMember);
-      showToast(
-        status
-          ? 'Seluruh Fitur Platform diset ke mode MAINTENANCE (Nonaktif)!'
-          : 'Seluruh Fitur Platform dibuka kembali ke mode NORMAL (Aktif)!',
-        status ? 'warn' : 'success'
-      );
-      return;
-    }
-    const list = role === 'admin' ? ADMIN_FEATURE_MENUS : MEMBER_FEATURE_MENUS;
-    const updated: Record<string, boolean> = {};
-    list.forEach((f) => {
-      updated[f.id] = status;
-    });
-    if (role === 'admin') {
-      setAdminFeatureMaintenance(updated);
+      setMaintenanceForm(newMaintenanceForm);
+      setAdminFeatureMaintenance(newAdminMaint);
+      setMemberFeatureMaintenance(newMemberMaint);
+    } else if (role === 'admin') {
+      ADMIN_FEATURE_MENUS.forEach((f) => {
+        newAdminMaint[f.id] = status;
+      });
+      setAdminFeatureMaintenance(newAdminMaint);
     } else {
-      setMemberFeatureMaintenance(updated);
-      setMaintenanceForm((mf) => ({ ...mf, isAiMaintenance: status }));
+      MEMBER_FEATURE_MENUS.forEach((f) => {
+        newMemberMaint[f.id] = status;
+      });
+      newMaintenanceForm.isAiMaintenance = status;
+      setMaintenanceForm(newMaintenanceForm);
+      setMemberFeatureMaintenance(newMemberMaint);
     }
+
+    // Auto-save seketika ke Supabase
+    await updateSystemSettings({
+      ...newMaintenanceForm,
+      adminFeatureMaintenance: newAdminMaint,
+      memberFeatureMaintenance: newMemberMaint,
+      featureMaintenanceCustomMessages: featureCustomMessages,
+    });
+
     showToast(
       status
-        ? `Semua fitur ${role === 'admin' ? 'Admin' : 'Siswa'} diset ke mode MAINTENANCE (Nonaktif)!`
-        : `Semua fitur ${role === 'admin' ? 'Admin' : 'Siswa'} dibuka kembali (NORMAL/Aktif)!`,
+        ? `Semua fitur ${role === 'admin' ? 'Admin' : role === 'member' ? 'Siswa' : 'Platform'} diset ke mode MAINTENANCE!`
+        : `Semua fitur ${role === 'admin' ? 'Admin' : role === 'member' ? 'Siswa' : 'Platform'} dibuka kembali (NORMAL/Aktif)!`,
       status ? 'warn' : 'success'
     );
+    setPendingBulkConfirmation(null);
   };
 
   const handleSaveFeatureSettings = async () => {
@@ -2958,15 +3017,10 @@ export const OwnerPanel: React.FC = () => {
                       <span>Skrip SQL Supabase</span>
                     </button>
 
-                    <button
-                      type="button"
-                      disabled={isSavingFeatures}
-                      onClick={handleSaveFeatureSettings}
-                      className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 via-purple-600 to-indigo-600 hover:opacity-90 disabled:opacity-50 text-white text-xs font-black flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-pink-500/25 active:scale-95"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>{isSavingFeatures ? 'Menyimpan ke Cloud...' : 'Simpan Semua Fitur'}</span>
-                    </button>
+                    <div className="px-3.5 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 flex items-center gap-2 text-emerald-300 text-xs font-bold shadow-sm">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Auto-Save Realtime</span>
+                    </div>
                   </div>
                 </div>
 
@@ -3041,7 +3095,12 @@ export const OwnerPanel: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() => handleBulkToggle(featureRoleTab, true)}
+                      onClick={() =>
+                        setPendingBulkConfirmation({
+                          role: featureRoleTab,
+                          status: true,
+                        })
+                      }
                       className="px-3 py-2 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                       title="Kunci semua fitur dalam role/sub-kontrol ini ke mode maintenance (nonaktif)"
                     >
@@ -3053,7 +3112,12 @@ export const OwnerPanel: React.FC = () => {
 
                     <button
                       type="button"
-                      onClick={() => handleBulkToggle(featureRoleTab, false)}
+                      onClick={() =>
+                        setPendingBulkConfirmation({
+                          role: featureRoleTab,
+                          status: false,
+                        })
+                      }
                       className="px-3 py-2 rounded-xl bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95"
                       title="Buka semua fitur dalam role/sub-kontrol ini ke mode normal (aktif)"
                     >
@@ -3262,14 +3326,19 @@ export const OwnerPanel: React.FC = () => {
                             <button
                               type="button"
                               onClick={() =>
-                                role === 'admin'
-                                  ? handleToggleAdminFeature(feature.id)
-                                  : handleToggleMemberFeature(feature.id)
+                                setPendingToggleConfirmation({
+                                  featureId: feature.id,
+                                  featureName: feature.name,
+                                  role: role,
+                                  categoryLabel: feature.categoryLabel,
+                                  currentIsMaint: !isFeatureActive,
+                                  nextIsMaint: isFeatureActive,
+                                })
                               }
                               className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
                                 isFeatureActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
                               }`}
-                              title={isFeatureActive ? 'Fitur aktif (klik untuk kunci ke maintenance)' : 'Fitur nonaktif (klik untuk aktifkan)'}
+                              title={isFeatureActive ? 'Klik untuk kunci fitur ke mode maintenance' : 'Klik untuk aktifkan kembali fitur'}
                             >
                               <span
                                 className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
@@ -3396,11 +3465,20 @@ export const OwnerPanel: React.FC = () => {
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={handleToggleWebsiteMaintenance}
+                                  onClick={() =>
+                                    setPendingToggleConfirmation({
+                                      featureId: 'website_global',
+                                      featureName: 'Mode Pemeliharaan Website',
+                                      role: 'global_website',
+                                      categoryLabel: 'Server & Website Global',
+                                      currentIsMaint: !isWebsiteActive,
+                                      nextIsMaint: isWebsiteActive,
+                                    })
+                                  }
                                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
                                     isWebsiteActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
                                   }`}
-                                  title={isWebsiteActive ? 'Website aktif normal (klik untuk kunci ke maintenance)' : 'Website sedang maintenance (klik untuk aktifkan kembali)'}
+                                  title={isWebsiteActive ? 'Klik untuk kunci website ke mode maintenance' : 'Klik untuk aktifkan kembali website'}
                                 >
                                   <span
                                     className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
@@ -3497,11 +3575,20 @@ export const OwnerPanel: React.FC = () => {
                                 </span>
                                 <button
                                   type="button"
-                                  onClick={handleToggleAiMaintenance}
+                                  onClick={() =>
+                                    setPendingToggleConfirmation({
+                                      featureId: 'ai_tutor',
+                                      featureName: 'Status Fitur AI Assistant',
+                                      role: 'global_ai',
+                                      categoryLabel: 'Kecerdasan Buatan (AI)',
+                                      currentIsMaint: !isAiActive,
+                                      nextIsMaint: isAiActive,
+                                    })
+                                  }
                                   className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
                                     isAiActive ? 'bg-emerald-500 hover:bg-emerald-400' : 'bg-slate-700 hover:bg-slate-600'
                                   }`}
-                                  title={isAiActive ? 'AI Assistant aktif normal (klik untuk kunci ke pengembangan)' : 'AI sedang nonaktif (klik untuk aktifkan)'}
+                                  title={isAiActive ? 'Klik untuk kunci AI ke mode pengembangan' : 'Klik untuk aktifkan kembali AI'}
                                 >
                                   <span
                                     className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-md transition-transform ${
@@ -3623,24 +3710,28 @@ export const OwnerPanel: React.FC = () => {
                   );
                 })()}
 
-                {/* Bottom Quick Save Sticky Banner */}
-                <div className="p-4 rounded-2xl bg-gradient-to-r from-[#1f1545] to-[#150f2e] border border-pink-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl">
+                {/* Auto-Sync Realtime Status Banner (Tanpa Perlu Tombol Simpan Manual) */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-[#171131] to-[#0f0b21] border border-purple-500/25 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xl">
                   <div className="flex items-center gap-2.5">
-                    <Sparkles className="w-4 h-4 text-pink-400 shrink-0" />
+                    <div className="relative flex h-3 w-3 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+                    </div>
                     <span className="text-xs text-slate-300">
-                      Perubahan kontrol maintenance tersimpan secara instan di lokal dan tersinkronisasi via Supabase Realtime saat Anda menekan tombol simpan.
+                      <strong className="text-white">Auto-Sync Realtime Aktif:</strong> Setiap perubahan sakelar fitur langsung tersimpan otomatis ke Supabase &amp; tersinkronisasi seketika ke seluruh perangkat tanpa perlu tombol simpan manual.
                     </span>
                   </div>
 
-                  <button
-                    type="button"
-                    disabled={isSavingFeatures}
-                    onClick={handleSaveFeatureSettings}
-                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-purple-600 hover:opacity-90 disabled:opacity-50 text-white font-bold text-xs shrink-0 cursor-pointer shadow-lg shadow-pink-500/25 active:scale-95 transition-all flex items-center justify-center gap-2"
-                  >
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>{isSavingFeatures ? 'Menyimpan...' : 'Terapkan Pengaturan Fitur'}</span>
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setShowSqlFeatureModal(true)}
+                      className="px-3.5 py-2 rounded-xl bg-[#231845] hover:bg-[#2f1f5e] text-purple-300 border border-purple-500/30 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 self-start sm:self-auto"
+                    >
+                      <FileCode className="w-3.5 h-3.5 text-pink-400" />
+                      <span>Skrip SQL Supabase</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -4168,6 +4259,218 @@ export const OwnerPanel: React.FC = () => {
               >
                 {copiedAccessSql ? <Check className="w-4 h-4 text-emerald-300" /> : <Copy className="w-4 h-4" />}
                 <span>{copiedAccessSql ? 'Tersalin ke Clipboard!' : 'Salin Query SQL'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 1. Modal Konfirmasi Perubahan Status Maintenance Fitur */}
+      {pendingToggleConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 text-white">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg shrink-0 ${
+                    pendingToggleConfirmation.nextIsMaint
+                      ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 shadow-amber-500/20'
+                      : 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 shadow-emerald-500/20'
+                  }`}
+                >
+                  {pendingToggleConfirmation.nextIsMaint ? (
+                    <Lock className="w-6 h-6" />
+                  ) : (
+                    <Unlock className="w-6 h-6" />
+                  )}
+                </div>
+                <div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border inline-block mb-1 ${
+                      pendingToggleConfirmation.nextIsMaint
+                        ? 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                        : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                    }`}
+                  >
+                    {pendingToggleConfirmation.nextIsMaint ? 'Konfirmasi Maintenance' : 'Konfirmasi Buka Fitur'}
+                  </span>
+                  <h3 className="font-extrabold text-base text-white">
+                    {pendingToggleConfirmation.nextIsMaint
+                      ? 'Kunci Fitur ke Mode Maintenance?'
+                      : 'Aktifkan Kembali Fitur?'}
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingToggleConfirmation(null)}
+                className="p-1 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Apakah Anda yakin ingin {pendingToggleConfirmation.nextIsMaint ? 'mengaktifkan mode maintenance untuk' : 'mengaktifkan kembali akses'} fitur{' '}
+              <strong className="text-white underline decoration-pink-500 underline-offset-2">
+                "{pendingToggleConfirmation.featureName}"
+              </strong>?
+            </p>
+
+            <div className="p-3.5 rounded-2xl bg-[#0b081c] border border-[#231744] space-y-2 text-xs">
+              <div className="flex items-center justify-between text-slate-400">
+                <span>ID Modul:</span>
+                <span className="font-mono text-purple-300 font-bold">{pendingToggleConfirmation.featureId}</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Target Akses:</span>
+                <span className="font-bold text-white">
+                  {pendingToggleConfirmation.role === 'global_website'
+                    ? 'Website Global (Semua Pengguna)'
+                    : pendingToggleConfirmation.role === 'global_ai'
+                    ? 'AI Tutor Siswa'
+                    : pendingToggleConfirmation.role === 'admin'
+                    ? 'Menu Guru & Admin'
+                    : 'Menu Siswa & Member'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-slate-400">
+                <span>Dampak:</span>
+                <span className={pendingToggleConfirmation.nextIsMaint ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
+                  {pendingToggleConfirmation.nextIsMaint
+                    ? 'Pengguna akan melihat layar pemeliharaan'
+                    : 'Fitur langsung dapat diakses dengan normal'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingToggleConfirmation(null)}
+                disabled={isExecutingToggle}
+                className="px-4 py-2.5 rounded-xl bg-[#1b1535] hover:bg-[#251d47] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isExecutingToggle}
+                onClick={async () => {
+                  setIsExecutingToggle(true);
+                  await executeToggleFeature(
+                    pendingToggleConfirmation.featureId,
+                    pendingToggleConfirmation.role,
+                    pendingToggleConfirmation.nextIsMaint,
+                    pendingToggleConfirmation.featureName
+                  );
+                  setIsExecutingToggle(false);
+                }}
+                className={`px-5 py-2.5 rounded-xl text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-lg transition-all active:scale-95 ${
+                  pendingToggleConfirmation.nextIsMaint
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 shadow-amber-500/25'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-500/25'
+                }`}
+              >
+                {pendingToggleConfirmation.nextIsMaint ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                <span>
+                  {isExecutingToggle
+                    ? 'Menyimpan...'
+                    : pendingToggleConfirmation.nextIsMaint
+                    ? 'Ya, Kunci Fitur'
+                    : 'Ya, Aktifkan Fitur'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2. Modal Konfirmasi Bulk Toggle */}
+      {pendingBulkConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="w-full max-w-md bg-[#141026] border border-[#3b2d61] rounded-3xl p-6 sm:p-7 shadow-2xl space-y-5 text-white">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-lg shrink-0 ${
+                    pendingBulkConfirmation.status
+                      ? 'bg-amber-500/15 border border-amber-500/30 text-amber-400 shadow-amber-500/20'
+                      : 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 shadow-emerald-500/20'
+                  }`}
+                >
+                  {pendingBulkConfirmation.status ? <Lock className="w-6 h-6" /> : <Unlock className="w-6 h-6" />}
+                </div>
+                <div>
+                  <span
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider border inline-block mb-1 ${
+                      pendingBulkConfirmation.status
+                        ? 'bg-amber-500/15 border-amber-500/30 text-amber-300'
+                        : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
+                    }`}
+                  >
+                    {pendingBulkConfirmation.status ? 'Kunci Massal' : 'Buka Massal'}
+                  </span>
+                  <h3 className="font-extrabold text-base text-white">
+                    {pendingBulkConfirmation.status
+                      ? 'Kunci Semua Fitur Sekaligus?'
+                      : 'Buka Semua Fitur Sekaligus?'}
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingBulkConfirmation(null)}
+                className="p-1 rounded-xl hover:bg-white/10 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Apakah Anda yakin ingin {pendingBulkConfirmation.status ? 'mengunci SEMUA fitur' : 'membuka kembali SEMUA fitur'}{' '}
+              dalam kategori <strong className="text-white">
+                {pendingBulkConfirmation.role === 'global'
+                  ? 'Sistem & Website'
+                  : pendingBulkConfirmation.role === 'admin'
+                  ? 'Menu Guru & Admin'
+                  : pendingBulkConfirmation.role === 'member'
+                  ? 'Menu Siswa & Member'
+                  : 'Seluruh Platform'}
+              </strong>? Perubahan ini langsung disinkronkan secara realtime.
+            </p>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingBulkConfirmation(null)}
+                disabled={isExecutingBulk}
+                className="px-4 py-2.5 rounded-xl bg-[#1b1535] hover:bg-[#251d47] text-slate-300 hover:text-white text-xs font-bold transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                disabled={isExecutingBulk}
+                onClick={async () => {
+                  setIsExecutingBulk(true);
+                  await handleBulkToggle(pendingBulkConfirmation.role, pendingBulkConfirmation.status);
+                  setIsExecutingBulk(false);
+                }}
+                className={`px-5 py-2.5 rounded-xl text-white text-xs font-black flex items-center gap-2 cursor-pointer shadow-lg transition-all active:scale-95 ${
+                  pendingBulkConfirmation.status
+                    ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 shadow-amber-500/25'
+                    : 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-500/25'
+                }`}
+              >
+                {pendingBulkConfirmation.status ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
+                <span>
+                  {isExecutingBulk
+                    ? 'Menerapkan...'
+                    : pendingBulkConfirmation.status
+                    ? 'Ya, Kunci Semua'
+                    : 'Ya, Buka Semua'}
+                </span>
               </button>
             </div>
           </div>

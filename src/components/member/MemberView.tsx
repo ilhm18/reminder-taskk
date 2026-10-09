@@ -229,12 +229,14 @@ export const MemberView: React.FC = () => {
   const [activeTab, setActiveTab] = useState<MemberTab>(getMemberTabFromUrl);
 
   const isCurrentTabMaintenance = useMemo(() => {
-    if (currentUser?.role === 'owner') return false;
+    const maintMap = systemSettings?.memberFeatureMaintenance || {};
     if (activeTab === 'ai_tutor') {
-      return Boolean(systemSettings?.isAiMaintenance || systemSettings?.memberFeatureMaintenance?.['ai_tutor']);
+      return Boolean(systemSettings?.isAiMaintenance || maintMap['ai_tutor']);
     }
-    return Boolean(systemSettings?.memberFeatureMaintenance?.[activeTab]);
-  }, [systemSettings?.memberFeatureMaintenance, systemSettings?.isAiMaintenance, activeTab, currentUser]);
+    if (activeTab === 'kuis_live' && (maintMap['kuis_live'] || maintMap['kuis'])) return true;
+    if (activeTab === 'bank_soal' && (maintMap['bank_soal'] || maintMap['kuis'])) return true;
+    return Boolean(maintMap[activeTab]);
+  }, [systemSettings?.memberFeatureMaintenance, systemSettings?.isAiMaintenance, activeTab]);
 
   const handleBackFromMaintenance = () => {
     // If dashboard is also under maintenance, redirect to first available non-maintenance feature

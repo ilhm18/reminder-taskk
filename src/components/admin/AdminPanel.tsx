@@ -282,9 +282,12 @@ export const AdminPanel: React.FC = () => {
   const [activeTab, setActiveTab] = useState<AdminTab>(getAdminTabFromUrl);
 
   const isCurrentTabMaintenance = useMemo(() => {
-    if (currentUser?.role === 'owner') return false;
-    return Boolean(systemSettings?.adminFeatureMaintenance?.[activeTab]);
-  }, [systemSettings?.adminFeatureMaintenance, activeTab, currentUser]);
+    const maintMap = systemSettings?.adminFeatureMaintenance || {};
+    if (Boolean(maintMap[activeTab])) return true;
+    if (activeTab === 'kuis_live' && (maintMap['kuis_live'] || maintMap['kuis'])) return true;
+    if (activeTab === 'bank_soal' && (maintMap['bank_soal'] || maintMap['kuis'])) return true;
+    return false;
+  }, [systemSettings?.adminFeatureMaintenance, activeTab]);
 
   const handleBackFromMaintenance = () => {
     // If dashboard is also under maintenance, redirect to first available non-maintenance feature
