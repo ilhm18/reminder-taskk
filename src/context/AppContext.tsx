@@ -183,7 +183,9 @@ interface AppContextType {
   createLiveQuiz: (quizId: string, title: string) => Promise<LiveQuiz>;
   updateLiveQuizStatus: (id: string, status: 'waiting' | 'active' | 'ended') => Promise<void>;
   nextLiveQuizQuestion: (id: string, newIndex: number) => Promise<void>;
-  submitLiveQuizResponse: (liveQuizId: string, questionIndex: number, selectedOptionIndex: number, isCorrect: boolean, pointsEarned: number, responseTimeMs: number) => Promise<void>;
+  submitLiveQuizResponse: (liveQuizId: string, questionIndex: number, selectedOptionIndex: number, isCorrect: boolean, pointsEarned: number, responseTimeMs: number, essayAnswer?: string) => Promise<void>;
+  setLiveQuizShowAnswers: (id: string, show: boolean) => Promise<void>;
+  setLiveQuizTimer: (id: string, seconds: number) => Promise<void>;
   deleteLiveQuiz: (id: string) => Promise<void>;
 
   // Absensi & Presensi Digital Kelas
@@ -2269,6 +2271,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               status: lq.status as any,
               currentQuestionIndex: lq.current_question_index || 0,
               activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+              showAnswers: lq.show_answers || false,
               createdAt: lq.created_at,
               updatedAt: lq.updated_at,
             };
@@ -2290,6 +2293,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               status: lq.status as any,
               currentQuestionIndex: lq.current_question_index || 0,
               activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+              showAnswers: lq.show_answers || false,
               createdAt: lq.created_at,
               updatedAt: lq.updated_at,
             };
@@ -2316,6 +2320,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               memberId: lqr.member_id,
               memberName: lqr.member_name,
               selectedOptionIndex: lqr.selected_option_index !== null ? Number(lqr.selected_option_index) : undefined,
+              essayAnswer: lqr.essay_answer || undefined,
               isCorrect: lqr.is_correct || false,
               pointsEarned: lqr.points_earned || 0,
               responseTimeMs: lqr.response_time_ms || 0,
@@ -3675,19 +3680,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
 
-    // 1. Check local state users by username column only
+    // 1. Check local state users by username column for admin role only
     const existsLocally = users.some(
-      (u) => u.username && u.username.toLowerCase() === clean
+      (u) => u.role === 'admin' && u.username && u.username.toLowerCase() === clean
     );
     if (existsLocally) return false;
 
-    // 2. Check Supabase profiles table for matching username column only
+    // 2. Check Supabase profiles table for matching username column of admin role only
     const client = getSupabaseClient();
     if (client) {
       try {
         const { data, error } = await client
           .from('profiles')
           .select('username')
+          .eq('role', 'admin')
           .ilike('username', clean)
           .limit(1);
 
@@ -5112,7 +5118,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateLiveQuizStatus = async (id: string, status: 'waiting' | 'active' | 'ended') => {
     setLiveQuizzes((prev) =>
-      prev.map((x) => (x.id === id ? { ...x, status, updatedAt: new Date().toISOString() } : x))
+      prev.map((x) => (x.id === id ? { ...x, status, showAnswers: false, updatedAt: new Date().toISOString() } : x))
     );
 
     const client = getSupabaseClient();
@@ -5120,6 +5126,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await client.from('live_quizzes').update({
           status,
+          show_answers: false,
           updated_at: new Date().toISOString(),
         }).eq('id', id);
       } catch (err) {
@@ -5130,7 +5137,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const nextLiveQuizQuestion = async (id: string, newIndex: number) => {
     setLiveQuizzes((prev) =>
-      prev.map((x) => (x.id === id ? { ...x, currentQuestionIndex: newIndex, updatedAt: new Date().toISOString() } : x))
+      prev.map((x) => (x.id === id ? { ...x, currentQuestionIndex: newIndex, showAnswers: false, updatedAt: new Date().toISOString() } : x))
     );
 
     const client = getSupabaseClient();
@@ -5138,6 +5145,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await client.from('live_quizzes').update({
           current_question_index: newIndex,
+          show_answers: false,
           updated_at: new Date().toISOString(),
         }).eq('id', id);
       } catch (err) {
@@ -5152,7 +5160,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     selectedOptionIndex: number,
     isCorrect: boolean,
     pointsEarned: number,
-    responseTimeMs: number
+    responseTimeMs: number,
+    essayAnswer?: string
   ) => {
     const newLQR: LiveQuizResponse = {
       id: 'lqr-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
@@ -5160,7 +5169,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       questionIndex,
       memberId: currentUser?.id || 'member-guest',
       memberName: currentUser?.name || 'Siswa',
-      selectedOptionIndex,
+      selectedOptionIndex: selectedOptionIndex === -1 ? undefined : selectedOptionIndex,
+      essayAnswer,
       isCorrect,
       pointsEarned,
       responseTimeMs,
@@ -5181,7 +5191,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           question_index: questionIndex,
           member_id: newLQR.memberId,
           member_name: newLQR.memberName,
-          selected_option_index: selectedOptionIndex,
+          selected_option_index: selectedOptionIndex === -1 ? null : selectedOptionIndex,
+          essay_answer: essayAnswer || null,
           is_correct: isCorrect,
           points_earned: pointsEarned,
           response_time_ms: responseTimeMs,
@@ -5189,6 +5200,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }, { onConflict: 'live_quiz_id,member_id,question_index' });
       } catch (err) {
         console.warn('Supabase live_quiz_responses upsert error:', err);
+      }
+    }
+  };
+
+  const setLiveQuizShowAnswers = async (id: string, show: boolean) => {
+    setLiveQuizzes((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, showAnswers: show, updatedAt: new Date().toISOString() } : x))
+    );
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').update({
+          show_answers: show,
+          updated_at: new Date().toISOString(),
+        }).eq('id', id);
+      } catch (err) {
+        console.warn('Supabase live_quizzes set show_answers error:', err);
+      }
+    }
+  };
+
+  const setLiveQuizTimer = async (id: string, seconds: number) => {
+    const endsAt = new Date(Date.now() + seconds * 1000).toISOString();
+    setLiveQuizzes((prev) =>
+      prev.map((x) => (x.id === id ? { ...x, activeQuestionEndsAt: endsAt, updatedAt: new Date().toISOString() } : x))
+    );
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        await client.from('live_quizzes').update({
+          active_question_ends_at: endsAt,
+          updated_at: new Date().toISOString(),
+        }).eq('id', id);
+      } catch (err) {
+        console.warn('Supabase live_quizzes set timer error:', err);
       }
     }
   };
@@ -7365,6 +7413,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateLiveQuizStatus,
         nextLiveQuizQuestion,
         submitLiveQuizResponse,
+        setLiveQuizShowAnswers,
+        setLiveQuizTimer,
         deleteLiveQuiz,
         attendanceSessions,
         attendanceRecords,

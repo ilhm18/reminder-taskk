@@ -411,6 +411,7 @@ export interface LiveQuiz {
   status: 'waiting' | 'active' | 'ended';
   currentQuestionIndex: number;
   activeQuestionEndsAt?: string;
+  showAnswers?: boolean;
   createdAt: string;
   updatedAt?: string;
 }
@@ -422,6 +423,7 @@ export interface LiveQuizResponse {
   memberId: string;
   memberName: string;
   selectedOptionIndex?: number;
+  essayAnswer?: string;
   isCorrect?: boolean;
   pointsEarned?: number;
   responseTimeMs?: number;
