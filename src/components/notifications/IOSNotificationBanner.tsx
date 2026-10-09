@@ -86,11 +86,7 @@ export const IOSNotificationBanner: React.FC = () => {
     setLiveBannerNotification(null);
   };
 
-  const handleBannerClick = (e: React.MouseEvent) => {
-    // If clicking close button or its children, ignore
-    if ((e.target as HTMLElement).closest('button')) {
-      return;
-    }
+  const handleBannerClick = () => {
     executeNotificationNavigation(activeNotif, currentRole || 'member', {
       markAsRead: markNotificationAsRead,
       closeDrawer: () => {

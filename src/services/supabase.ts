@@ -147,7 +147,6 @@ export const SUPABASE_SQL_SCHEMA = `-- =========================================
 -- 1. Buat Tabel Profil Pengguna (Owner, Admin, Member)
 CREATE TABLE IF NOT EXISTS public.profiles (
   id TEXT PRIMARY KEY,
-  username TEXT,
   name TEXT NOT NULL,
   email TEXT,
   password TEXT DEFAULT 'password123',
@@ -159,13 +158,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Migrasi Keamanan & Skema: Hapus constraint dan tambahkan kolom educator_type dan username
+-- Migrasi Keamanan & Skema: Hapus constraint dan tambahkan kolom educator_type
 ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_email_key;
 DROP INDEX IF EXISTS public.profiles_email_unique_idx;
 DROP INDEX IF EXISTS profiles_email_idx;
 DROP INDEX IF EXISTS public.profiles_email_idx;
 ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS educator_type TEXT DEFAULT 'guru';
-ALTER TABLE IF EXISTS public.profiles ADD COLUMN IF NOT EXISTS username TEXT;
 
 -- Seed Akun Owner Utama (Terhubung langsung dengan database SQL)
 INSERT INTO public.profiles (id, name, email, password, role, status)
@@ -258,10 +256,6 @@ ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS target_role 
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS recipient_id TEXT;
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS class_id TEXT;
 ALTER TABLE IF EXISTS public.notifications ADD COLUMN IF NOT EXISTS task_id TEXT;
-
-CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON public.notifications(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_notifications_recipient_id ON public.notifications(recipient_id);
-CREATE INDEX IF NOT EXISTS idx_notifications_class_id ON public.notifications(class_id);
 
 -- 6. Buat Tabel Jadwal Pelajaran / Mata Kuliah
 CREATE TABLE IF NOT EXISTS public.schedules (
@@ -576,7 +570,6 @@ CREATE TABLE IF NOT EXISTS public.live_quizzes (
   status TEXT NOT NULL DEFAULT 'waiting' CHECK (status IN ('waiting', 'active', 'ended')),
   current_question_index INTEGER DEFAULT 0,
   active_question_ends_at TIMESTAMPTZ,
-  show_answers BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -584,7 +577,6 @@ CREATE TABLE IF NOT EXISTS public.live_quizzes (
 -- Kolom opsional jika tabel sudah ada sebelumnya
 ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS current_question_index INTEGER DEFAULT 0;
 ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS active_question_ends_at TIMESTAMPTZ;
-ALTER TABLE IF EXISTS public.live_quizzes ADD COLUMN IF NOT EXISTS show_answers BOOLEAN DEFAULT false;
 
 CREATE INDEX IF NOT EXISTS idx_live_quizzes_class ON public.live_quizzes(class_id);
 CREATE INDEX IF NOT EXISTS idx_live_quizzes_status ON public.live_quizzes(status);
@@ -597,21 +589,12 @@ CREATE TABLE IF NOT EXISTS public.live_quiz_responses (
   member_id TEXT NOT NULL,
   member_name TEXT NOT NULL,
   selected_option_index INTEGER,
-  essay_answer TEXT,
   is_correct BOOLEAN DEFAULT false,
   points_earned INTEGER DEFAULT 0,
   response_time_ms INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT uq_live_quiz_member_question UNIQUE (live_quiz_id, member_id, question_index)
 );
-
--- Kolom opsional jika tabel sudah ada sebelumnya
-ALTER TABLE IF EXISTS public.live_quiz_responses ADD COLUMN IF NOT EXISTS essay_answer TEXT;
-
--- Hapus duplikat dan pastikan unique constraint pada live_quiz_responses ada untuk mendukung upsert
-DELETE FROM public.live_quiz_responses a USING public.live_quiz_responses b WHERE a.id < b.id AND a.live_quiz_id = b.live_quiz_id AND a.member_id = b.member_id AND a.question_index = b.question_index;
-ALTER TABLE public.live_quiz_responses DROP CONSTRAINT IF EXISTS uq_live_quiz_member_question;
-ALTER TABLE public.live_quiz_responses ADD CONSTRAINT uq_live_quiz_member_question UNIQUE (live_quiz_id, member_id, question_index);
 
 CREATE INDEX IF NOT EXISTS idx_live_quiz_responses_quiz ON public.live_quiz_responses(live_quiz_id);
 

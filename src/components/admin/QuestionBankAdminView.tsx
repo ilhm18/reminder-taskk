@@ -45,8 +45,6 @@ export const QuestionBankAdminView: React.FC = () => {
     updateLiveQuizStatus,
     nextLiveQuizQuestion,
     deleteLiveQuiz,
-    setLiveQuizShowAnswers,
-    setLiveQuizTimer,
   } = useApp();
 
   const educatorType = resolveEducatorType(currentUser, currentClass);
@@ -1328,8 +1326,6 @@ export const QuestionBankAdminView: React.FC = () => {
           questionBanks={questionBanks}
           showToast={showToast}
           submitQuizAnswers={useApp().submitQuizAnswers}
-          setLiveQuizShowAnswers={setLiveQuizShowAnswers}
-          setLiveQuizTimer={setLiveQuizTimer}
         />
       )}
     </div>
@@ -1348,8 +1344,6 @@ interface LiveQuizTeacherDashboardProps {
   questionBanks: QuestionBankItem[];
   showToast: (msg: string, type: 'info' | 'success' | 'warn') => void;
   submitQuizAnswers: any;
-  setLiveQuizShowAnswers: (id: string, show: boolean) => Promise<void>;
-  setLiveQuizTimer: (id: string, seconds: number) => Promise<void>;
 }
 
 const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
@@ -1364,12 +1358,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
   questionBanks,
   showToast,
   submitQuizAnswers,
-  setLiveQuizShowAnswers,
-  setLiveQuizTimer,
 }) => {
-  const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState<number>(0);
-
   // Finding the quiz data
   const quiz = questionBanks.find((q) => q.id === activeLiveQuiz.quizId);
   
@@ -1426,41 +1415,8 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
     .map(([id, data]) => ({ id, ...data }))
     .sort((a, b) => b.score - a.score);
 
-  // Sync with showAnswers value in DB
-  useEffect(() => {
-    if (activeLiveQuiz.showAnswers !== showLiveStats) {
-      setShowLiveStats(activeLiveQuiz.showAnswers || false);
-    }
-  }, [activeLiveQuiz.showAnswers]);
-
-  // Countdown timer logic
-  useEffect(() => {
-    if (!activeLiveQuiz.activeQuestionEndsAt || activeLiveQuiz.status !== 'active') {
-      setSecondsLeft(0);
-      return;
-    }
-    const ends = new Date(activeLiveQuiz.activeQuestionEndsAt).getTime();
-    const updateTimer = () => {
-      const diff = Math.max(0, Math.ceil((ends - Date.now()) / 1000));
-      setSecondsLeft(diff);
-      if (diff === 0 && !activeLiveQuiz.showAnswers) {
-        // Auto show answers when timer runs out
-        setLiveQuizShowAnswers(activeLiveQuiz.id, true);
-        setShowLiveStats(true);
-        playNotificationSound('success');
-      }
-    };
-    updateTimer();
-    const timer = setInterval(updateTimer, 1000);
-    return () => clearInterval(timer);
-  }, [activeLiveQuiz.activeQuestionEndsAt, activeLiveQuiz.status, activeLiveQuiz.showAnswers]);
-
   const handleStartQuiz = async () => {
-    const limit = currentQuestion?.points ? currentQuestion.points * 3 : (quiz?.timeLimitPerQuestionSeconds || 30);
-    const finalLimit = limit > 0 ? limit : 30;
-
     await updateLiveQuizStatus(activeLiveQuiz.id, 'active');
-    await setLiveQuizTimer(activeLiveQuiz.id, finalLimit);
     showToast('Kuis live resmi dimulai! Semoga sukses untuk para siswa! 🚀', 'success');
   };
 
@@ -1469,19 +1425,12 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
       await updateLiveQuizStatus(activeLiveQuiz.id, 'ended');
       showToast('Kuis selesai! Mari kita lihat sang juara di podium! 🏆', 'success');
     } else {
-      const nextIdx = activeLiveQuiz.currentQuestionIndex + 1;
-      const nextQ = quiz?.questions?.[nextIdx];
-      const limit = nextQ?.points ? nextQ.points * 3 : (quiz?.timeLimitPerQuestionSeconds || 30);
-      const finalLimit = limit > 0 ? limit : 30;
-
-      await nextLiveQuizQuestion(activeLiveQuiz.id, nextIdx);
-      await setLiveQuizTimer(activeLiveQuiz.id, finalLimit);
+      await nextLiveQuizQuestion(activeLiveQuiz.id, activeLiveQuiz.currentQuestionIndex + 1);
       setShowLiveStats(false);
     }
   };
 
-  const handleRevealStats = async () => {
-    await setLiveQuizShowAnswers(activeLiveQuiz.id, true);
+  const handleRevealStats = () => {
     setShowLiveStats(true);
     playNotificationSound('success');
   };
@@ -1500,7 +1449,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
             questionId: q.id,
             type: q.type,
             selectedOptionIndex: matched?.selectedOptionIndex,
-            essayAnswerText: matched?.essayAnswer || '',
+            essayAnswerText: '',
             isCorrect: matched?.isCorrect,
             pointsEarned: matched?.pointsEarned || 0,
           };
@@ -1517,14 +1466,11 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
     }
   };
 
-  const handleForceClose = () => {
-    setIsConfirmExitOpen(true);
-  };
-
-  const handleConfirmExit = async () => {
-    await deleteLiveQuiz(activeLiveQuiz.id);
-    setActiveLiveQuiz(null);
-    setIsConfirmExitOpen(false);
+  const handleForceClose = async () => {
+    if (confirm('Apakah Anda yakin ingin mematikan sesi Kuis Live ini? Semua data sesi real-time saat ini akan dihapus.')) {
+      await deleteLiveQuiz(activeLiveQuiz.id);
+      setActiveLiveQuiz(null);
+    }
   };
 
   if (!quiz) return null;
@@ -1554,7 +1500,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
           <button
             type="button"
             onClick={handleForceClose}
-            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/25 border border-red-500/25 text-red-400 transition-colors cursor-pointer"
+            className="p-2 rounded-xl bg-red-500/10 hover:bg-red-500/25 border border-red-500/25 text-red-400 transition-colors"
             title="Tutup Sesi"
           >
             <X className="w-4 h-4 stroke-[3]" />
@@ -1634,118 +1580,70 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
             {/* Response Statistics Card */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-center">
               
-              {/* Option Distribution Bars or Essay Student Answers */}
+              {/* Option Distribution Bars */}
               <div className="md:col-span-8 p-5 sm:p-6 rounded-3xl bg-[#140e2b] border border-[#2d1e57] space-y-4">
                 <h3 className="text-xs font-black text-slate-400 uppercase tracking-wider">
-                  {currentQuestion.type === 'essay'
-                    ? 'Jawaban Essay Siswa 📝'
-                    : showLiveStats
-                    ? 'Distribusi Jawaban Siswa 📊'
-                    : 'Pilihan Jawaban'}
+                  {showLiveStats ? 'Distribusi Jawaban Siswa 📊' : 'Pilihan Jawaban'}
                 </h3>
                 
-                {currentQuestion.type === 'essay' ? (
-                  <div className="space-y-4">
-                    {/* Key answer display */}
-                    <div className="p-4 rounded-2xl bg-purple-950/30 border border-purple-500/30">
-                      <span className="text-[10px] font-black text-purple-300 block mb-1">KUNCI KATA KUNCI JAWABAN (ESSAY)</span>
-                      <p className="text-sm font-bold text-white">
-                        {currentQuestion.essayAnswerKey || 'Bebas / Auto Benar (tanpa filter kata kunci)'}
-                      </p>
-                    </div>
+                <div className="space-y-3">
+                  {['A', 'B', 'C', 'D'].map((lbl, idx) => {
+                    const optText = currentQuestion.options?.[idx] || '';
+                    const count = optionCounts[idx];
+                    const percentage = currentAnswers.length > 0 ? Math.round((count / currentAnswers.length) * 100) : 0;
+                    const isCorrect = currentQuestion.correctOptionIndex === idx;
 
-                    {/* Student answers list */}
-                    <div className="space-y-2 max-h-80 overflow-y-auto pr-1">
-                      {currentAnswers.length === 0 ? (
-                        <p className="text-xs text-slate-500 italic py-4 text-center">Belum ada siswa yang menjawab...</p>
-                      ) : (
-                        currentAnswers.map((ans) => (
-                          <div key={ans.id} className="p-3.5 rounded-2xl bg-[#1b153a] border border-[#2e1d5a] flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in duration-200">
-                            <div className="space-y-1">
-                              <span className="text-xs font-black text-pink-300 block">🎭 {ans.memberName}</span>
-                              <p className="text-xs text-white bg-[#0e0924] p-2.5 rounded-xl border border-[#251744] font-mono leading-relaxed whitespace-pre-wrap">
-                                {ans.essayAnswer || '(kosong)'}
-                              </p>
-                            </div>
-                            <div className="shrink-0 flex items-center gap-2">
-                              {showLiveStats && (
-                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
-                                  ans.isCorrect
-                                    ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400'
-                                    : 'bg-red-500/15 border-red-500/30 text-red-400'
-                                }`}>
-                                  {ans.isCorrect ? '✓ Cocok' : '✗ Belum Cocok'}
-                                </span>
-                              )}
-                              <span className="text-[10px] text-slate-400 font-mono">
-                                +{ans.pointsEarned || 0} Poin
-                              </span>
-                            </div>
+                    // Option branding colors (Kahoot style!)
+                    const colors = [
+                      'bg-red-500/20 border-red-500/40 text-red-300',
+                      'bg-blue-500/20 border-blue-500/40 text-blue-300',
+                      'bg-amber-500/20 border-amber-500/40 text-amber-300',
+                      'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
+                    ];
+
+                    const barColors = [
+                      'bg-red-500',
+                      'bg-blue-500',
+                      'bg-amber-500',
+                      'bg-emerald-500',
+                    ];
+
+                    return (
+                      <div key={idx} className="space-y-1.5">
+                        <div className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between ${
+                          showLiveStats && isCorrect
+                            ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg shadow-emerald-500/10'
+                            : showLiveStats
+                            ? 'bg-[#181335]/40 border-[#2d2252]/40 opacity-55'
+                            : colors[idx]
+                        }`}>
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center font-black">
+                              {lbl}
+                            </span>
+                            <span className="truncate">{optText}</span>
                           </div>
-                        ))
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {['A', 'B', 'C', 'D'].map((lbl, idx) => {
-                      const optText = currentQuestion.options?.[idx] || '';
-                      const count = optionCounts[idx];
-                      const percentage = currentAnswers.length > 0 ? Math.round((count / currentAnswers.length) * 100) : 0;
-                      const isCorrect = currentQuestion.correctOptionIndex === idx;
-
-                      // Option branding colors (Kahoot style!)
-                      const colors = [
-                        'bg-red-500/20 border-red-500/40 text-red-300',
-                        'bg-blue-500/20 border-blue-500/40 text-blue-300',
-                        'bg-amber-500/20 border-amber-500/40 text-amber-300',
-                        'bg-emerald-500/20 border-emerald-500/40 text-emerald-300',
-                      ];
-
-                      const barColors = [
-                        'bg-red-500',
-                        'bg-blue-500',
-                        'bg-amber-500',
-                        'bg-emerald-500',
-                      ];
-
-                      return (
-                        <div key={idx} className="space-y-1.5">
-                          <div className={`p-3 rounded-2xl border text-xs font-bold flex items-center justify-between ${
-                            showLiveStats && isCorrect
-                              ? 'bg-emerald-950/60 border-emerald-500 text-white shadow-lg shadow-emerald-500/10'
-                              : showLiveStats
-                              ? 'bg-[#181335]/40 border-[#2d2252]/40 opacity-55'
-                              : colors[idx]
-                          }`}>
-                            <div className="flex items-center gap-2 truncate">
-                              <span className="w-6 h-6 rounded-lg bg-white/10 flex items-center justify-center font-black">
-                                {lbl}
-                              </span>
-                              <span className="truncate">{optText}</span>
-                            </div>
-                            {showLiveStats && (
-                              <div className="flex items-center gap-2 shrink-0 font-mono">
-                                <span>{count} Siswa ({percentage}%)</span>
-                                {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
-                              </div>
-                            )}
-                          </div>
-
-                          {/* Bar Distribution */}
                           {showLiveStats && (
-                            <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
-                              <div
-                                className={`h-full rounded-full transition-all duration-1000 ${isCorrect ? 'bg-emerald-500' : barColors[idx]}`}
-                                style={{ width: `${percentage}%` }}
-                              />
+                            <div className="flex items-center gap-2 shrink-0 font-mono">
+                              <span>{count} Siswa ({percentage}%)</span>
+                              {isCorrect && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
                             </div>
                           )}
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+
+                        {/* Bar Distribution */}
+                        {showLiveStats && (
+                          <div className="w-full h-2 rounded-full bg-white/5 overflow-hidden">
+                            <div
+                              className={`h-full rounded-full transition-all duration-1000 ${isCorrect ? 'bg-emerald-500' : barColors[idx]}`}
+                              style={{ width: `${percentage}%` }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Connected response count wheel */}
@@ -1910,49 +1808,6 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
           </div>
         )}
       </main>
-
-      {/* Sleek Custom Confirm Modal instead of native browser popup to prevent iFrame blockages */}
-      {isConfirmExitOpen && (
-        <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-sm p-6 rounded-3xl bg-[#140e2d] border border-[#3c256d] text-center space-y-4 shadow-2xl relative animate-in zoom-in-95 duration-200">
-            {/* Tanda silang (X close button) */}
-            <button
-              type="button"
-              onClick={() => setIsConfirmExitOpen(false)}
-              className="absolute top-4 right-4 p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-[#20183b] transition-all cursor-pointer active:scale-95"
-              title="Tutup"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="w-12 h-12 rounded-full bg-red-500/10 border border-red-500/30 flex items-center justify-center text-red-500 text-xl mx-auto">
-              ⚠️
-            </div>
-            <div className="space-y-1">
-              <h3 className="text-base font-black text-white">Matikan Sesi Kuis Live?</h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Apakah Anda yakin ingin mematikan sesi kuis live ini? Seluruh riwayat jawaban real-time siswa saat ini akan dihapus permanen.
-              </p>
-            </div>
-            <div className="grid grid-cols-2 gap-2 pt-2">
-              <button
-                type="button"
-                onClick={handleConfirmExit}
-                className="py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black transition-all cursor-pointer shadow-lg shadow-red-600/20 active:scale-95"
-              >
-                Ya, Matikan Kuis
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsConfirmExitOpen(false)}
-                className="py-2.5 rounded-xl bg-[#1e173e] hover:bg-[#2c2058] border border-[#3b2374] text-slate-300 text-xs font-bold transition-all cursor-pointer active:scale-95"
-              >
-                Batal
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
