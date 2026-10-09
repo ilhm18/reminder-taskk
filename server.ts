@@ -478,6 +478,50 @@ const checkUpcomingDeadlinesHandler = async (req: express.Request, res: express.
 app.post('/api/check-upcoming-deadlines', checkUpcomingDeadlinesHandler);
 app.get('/api/check-upcoming-deadlines', checkUpcomingDeadlinesHandler);
 
+// Endpoint: Fetch general notifications for user in background
+app.get('/api/check-user-notifications', async (req, res) => {
+  try {
+    const client = getSupabaseClientForRequest(req);
+    const userId = req.query.userId as string;
+    const role = req.query.role as string;
+    const classId = req.query.classId as string;
+
+    if (!userId) {
+      return res.json({ success: true, notifications: [], message: 'No userId provided' });
+    }
+
+    // Fetch latest notifications from Supabase
+    const { data, error } = await client
+      .from('notifications')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(30);
+
+    if (error || !Array.isArray(data)) {
+      return res.json({ success: true, notifications: [], message: 'No notifications or query error' });
+    }
+
+    // Filter relevant notifications matching recipient_id, target_class or target_role
+    const filtered = data.filter((n: any) => {
+      let isAllowed = true;
+      if (n.recipient_id && n.recipient_id !== userId) {
+        isAllowed = false;
+      }
+      if (n.class_id && classId && n.class_id !== classId) {
+        isAllowed = false;
+      }
+      if (n.target_role && n.target_role !== 'all' && n.target_role !== role) {
+        isAllowed = false;
+      }
+      return isAllowed;
+    });
+
+    return res.json({ success: true, notifications: filtered });
+  } catch (err: any) {
+    return res.json({ success: false, error: err?.message });
+  }
+});
+
 // Endpoint: Automated schedule warning check (2 jam sebelum jadwal dimulai)
 const checkUpcomingSchedulesHandler = async (req: express.Request, res: express.Response) => {
   try {

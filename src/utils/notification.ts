@@ -85,7 +85,28 @@ export function playNotificationSoundOnce(notificationId: string, type: 'beep' |
 export async function registerServiceWorkerForNotifications(): Promise<void> {
   if ('serviceWorker' in navigator) {
     try {
-      await navigator.serviceWorker.register('/sw.js');
+      const registration = await navigator.serviceWorker.register('/sw.js');
+      console.log('Service Worker registered successfully:', registration);
+
+      // Register periodic background sync for notification polling when tab is closed
+      if ('periodicSync' in registration) {
+        try {
+          const status = await navigator.permissions.query({
+            name: 'periodic-background-sync' as any,
+          });
+          if (status.state === 'granted') {
+            await (registration as any).periodicSync.register('check-deadlines', {
+              minInterval: 10 * 60 * 1000, // 10 minutes
+            });
+            await (registration as any).periodicSync.register('check-notifications', {
+              minInterval: 10 * 60 * 1000, // 10 minutes
+            });
+            console.log('Periodic sync tags registered successfully!');
+          }
+        } catch (syncErr) {
+          console.warn('Periodic sync registration skipped:', syncErr);
+        }
+      }
     } catch (err) {
       console.warn('SW register warning:', err);
     }

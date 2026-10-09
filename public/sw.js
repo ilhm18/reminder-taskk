@@ -34,24 +34,73 @@ const checkUpcomingDeadlinesInBackground = async () => {
   }
 };
 
+// Periodic background notification checker for general notifications when website is closed
+const checkNewNotificationsInBackground = async () => {
+  try {
+    // 1. Read user context from cache
+    const contextCache = await caches.open('remindtask-user-context-v1');
+    const cachedResponse = await contextCache.match('/sw-user-context.json');
+    if (!cachedResponse) return;
+    const userContext = await cachedResponse.json();
+
+    const { userId, role, classId } = userContext;
+    if (!userId) return;
+
+    // 2. Fetch new notifications from the server endpoint
+    const url = `/api/check-user-notifications?userId=${encodeURIComponent(userId)}&role=${encodeURIComponent(role)}&classId=${encodeURIComponent(classId)}`;
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+
+    if (data && Array.isArray(data.notifications)) {
+      const alertCache = await caches.open('remindtask-notifications-alerts-v1');
+      for (const notif of data.notifications) {
+        const cacheKey = `/notif-alert-${notif.id}`;
+        const alreadyShown = await alertCache.match(cacheKey);
+
+        if (!alreadyShown) {
+          // Show the push notification
+          await self.registration.showNotification(notif.title, {
+            body: notif.message,
+            icon: 'https://api.iconify.design/heroicons:bell-20-solid.svg?color=%23ec4899',
+            badge: 'https://api.iconify.design/heroicons:bell-20-solid.svg?color=%23ec4899',
+            vibrate: [200, 100, 200],
+            tag: `notif-${notif.id}`,
+            data: `/`,
+          });
+          // Mark as shown in SW Cache
+          await alertCache.put(cacheKey, new Response('1', { headers: { 'Content-Type': 'text/plain' } }));
+        }
+      }
+    }
+  } catch (err) {
+    // Ignore network errors in background
+  }
+};
+
+const runAllBackgroundChecks = async () => {
+  await checkUpcomingDeadlinesInBackground();
+  await checkNewNotificationsInBackground();
+};
+
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       await self.clients.claim();
-      // Run once immediately
-      checkUpcomingDeadlinesInBackground();
-      // Run periodically every 60 seconds
-      setInterval(() => {
-        checkUpcomingDeadlinesInBackground();
-      }, 60000);
+      // Run immediately on activation
+      await runAllBackgroundChecks();
+      // Keep checking every 45 seconds while service worker is active
+      setInterval(async () => {
+        await runAllBackgroundChecks();
+      }, 45000);
     })()
   );
 });
 
 // Listen for periodic sync if supported by browser
 self.addEventListener('periodicsync', (event) => {
-  if (event.tag === 'check-deadlines') {
-    event.waitUntil(checkUpcomingDeadlinesInBackground());
+  if (event.tag === 'check-deadlines' || event.tag === 'check-notifications') {
+    event.waitUntil(runAllBackgroundChecks());
   }
 });
 

@@ -1300,13 +1300,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             createdAt: s.created_at,
           }));
 
-          setAttendanceSessions((prev) => {
-            const remoteMap = new Map(mappedSessions.map((x) => [x.id, x]));
-            const localOnly = prev.filter((x) => !remoteMap.has(x.id));
-            const merged = [...mappedSessions, ...localOnly];
-            try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(merged)); } catch {}
-            return merged;
-          });
+          setAttendanceSessions(mappedSessions);
+          try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(mappedSessions)); } catch {}
         }
       } catch (err) {
         console.warn('Sync attendance_sessions skipped or failed:', err);
@@ -1334,13 +1329,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             createdAt: r.created_at,
           }));
 
-          setAttendanceRecords((prev) => {
-            const remoteMap = new Map(mappedRecords.map((x) => [x.id, x]));
-            const localOnly = prev.filter((x) => !remoteMap.has(x.id));
-            const merged = [...mappedRecords, ...localOnly];
-            try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(merged)); } catch {}
-            return merged;
-          });
+          setAttendanceRecords(mappedRecords);
+          try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(mappedRecords)); } catch {}
         }
       } catch (err) {
         console.warn('Sync attendance_records skipped or failed:', err);
@@ -2133,6 +2123,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } else if (payload.eventType === 'DELETE') {
             const oldId = (payload.old as any).id;
             setAttendanceSessions((prev) => prev.filter((x) => x.id !== oldId));
+            setAttendanceRecords((prev) => prev.filter((x) => x.sessionId !== oldId));
           }
         }
       )
@@ -2242,6 +2233,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return classes.find((c) => c.id === currentClassId) || classes[0] || null;
   }, [classes, currentUser, currentClassId]);
+
+  // Service Worker User Context Cacher for Background Notifications when tab is closed
+  useEffect(() => {
+    const updateServiceWorkerUserContext = async () => {
+      if ('caches' in window && currentUser) {
+        try {
+          const cache = await caches.open('remindtask-user-context-v1');
+          const data = {
+            userId: currentUser.id,
+            role: currentRole || 'member',
+            classId: currentClass?.id || currentUser.classId || '',
+            classCode: currentClass?.code || '',
+            cachedAt: new Date().toISOString(),
+          };
+          await cache.put('/sw-user-context.json', new Response(JSON.stringify(data), {
+            headers: { 'Content-Type': 'application/json' }
+          }));
+        } catch (err) {
+          console.warn('Failed to update SW user context cache:', err);
+        }
+      }
+    };
+    updateServiceWorkerUserContext();
+  }, [currentUser, currentClass?.id, currentClass?.code, currentRole]);
 
   // Class-specific Realtime Presence Tracking via Supabase
   useEffect(() => {
@@ -3523,22 +3538,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return false;
     }
 
-    // 1. Check local state users
+    // 1. Check local state users by username column only
     const existsLocally = users.some(
-      (u) =>
-        (u.username && u.username.toLowerCase() === clean) ||
-        u.id.toLowerCase() === clean
+      (u) => u.username && u.username.toLowerCase() === clean
     );
     if (existsLocally) return false;
 
-    // 2. Check Supabase profiles table
+    // 2. Check Supabase profiles table for matching username column only
     const client = getSupabaseClient();
     if (client) {
       try {
         const { data, error } = await client
           .from('profiles')
-          .select('id, username')
-          .or(`username.ilike.${clean},id.ilike.${clean}`)
+          .select('username')
+          .ilike('username', clean)
           .limit(1);
 
         if (!error && Array.isArray(data) && data.length > 0) {
@@ -4991,20 +5004,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           
         if (error) {
           console.error('Supabase close session error:', error);
+          const errMsg = error.message || '';
+          const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
+            errMsg.toLowerCase().includes('network error') ||
+            errMsg.toLowerCase().includes('load failed') ||
+            errMsg.toLowerCase().includes('networkerror');
+
+          if (isNetwork) {
+            // Keep the local closed state, do not revert, show friendly local notice
+            showToast('Disimpan secara lokal. Sesi ditutup offline dan akan disinkronkan saat jaringan stabil.', 'info');
+          } else {
+            success = false;
+            showToast(`Gagal memperbarui database: ${error.message}`, 'warn');
+            // Revert local state if error
+            setAttendanceSessions((prev) =>
+              prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
+            );
+          }
+        }
+      } catch (err: any) {
+        console.warn('Supabase attendance_sessions update error:', err);
+        const errMsg = err?.message || '';
+        const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
+          errMsg.toLowerCase().includes('network error') ||
+          errMsg.toLowerCase().includes('load failed') ||
+          errMsg.toLowerCase().includes('networkerror');
+
+        if (isNetwork) {
+          showToast('Disimpan secara lokal. Sesi ditutup offline dan akan disinkronkan saat jaringan stabil.', 'info');
+        } else {
           success = false;
-          showToast(`Gagal memperbarui database: ${error.message}`, 'warn');
-          // Revert local state if error
+          // Revert local state
           setAttendanceSessions((prev) =>
             prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
           );
         }
-      } catch (err) {
-        console.warn('Supabase attendance_sessions update error:', err);
-        success = false;
-        // Revert local state
-        setAttendanceSessions((prev) =>
-          prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
-        );
       } finally {
         setTimeout(() => {
           delete mutatingSessionIdsRef.current[sessionId];
@@ -5039,21 +5073,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           
         if (error) {
           console.error('Supabase reopen session error:', error);
+          const errMsg = error.message || '';
+          const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
+            errMsg.toLowerCase().includes('network error') ||
+            errMsg.toLowerCase().includes('load failed') ||
+            errMsg.toLowerCase().includes('networkerror');
+
+          if (isNetwork) {
+            showToast('Disimpan secara lokal. Sesi dibuka offline dan akan disinkronkan saat jaringan stabil.', 'info');
+          } else {
+            success = false;
+            showToast(`Gagal membuka kembali sesi: ${error.message}`, 'warn');
+            // Revert local state
+            const oldSession = attendanceSessions.find((s) => s.id === sessionId);
+            setAttendanceSessions((prev) =>
+              prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
+            );
+          }
+        }
+      } catch (err: any) {
+        console.warn('Supabase attendance_sessions reopen error:', err);
+        const errMsg = err?.message || '';
+        const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
+          errMsg.toLowerCase().includes('network error') ||
+          errMsg.toLowerCase().includes('load failed') ||
+          errMsg.toLowerCase().includes('networkerror');
+
+        if (isNetwork) {
+          showToast('Disimpan secara lokal. Sesi dibuka offline dan akan disinkronkan saat jaringan stabil.', 'info');
+        } else {
           success = false;
-          showToast(`Gagal membuka kembali sesi: ${error.message}`, 'warn');
-          // Revert local state
           const oldSession = attendanceSessions.find((s) => s.id === sessionId);
           setAttendanceSessions((prev) =>
             prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
           );
         }
-      } catch (err) {
-        console.warn('Supabase attendance_sessions reopen error:', err);
-        success = false;
-        const oldSession = attendanceSessions.find((s) => s.id === sessionId);
-        setAttendanceSessions((prev) =>
-          prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
-        );
       } finally {
         setTimeout(() => {
           delete mutatingSessionIdsRef.current[sessionId];
@@ -5294,41 +5348,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const client = getSupabaseClient();
     if (!client) return;
     try {
-      let query = client.from('attendance_records').select('*').order('created_at', { ascending: false });
-      if (sessionId) {
-        query = query.eq('session_id', sessionId);
-      } else {
-        query = query.limit(200);
-      }
-      const res = await query;
-      if (Array.isArray(res.data)) {
-        const mapped: AttendanceRecord[] = res.data.map((r: any) => ({
-          id: r.id,
-          sessionId: r.session_id,
-          classId: r.class_id,
-          studentId: r.student_id,
-          studentName: r.student_name,
-          studentEmail: r.student_email || undefined,
-          status: r.status,
-          checkInTime: r.check_in_time || r.created_at,
-          deviceInfo: r.device_info || undefined,
-          verificationMethod: r.verification_method,
-          note: r.note || undefined,
-          proofFileUrl: r.proof_file_url || undefined,
-          proofFileName: r.proof_file_name || undefined,
-          locationVerified: r.location_verified ?? false,
-          createdAt: r.created_at || new Date().toISOString(),
-        }));
-        setAttendanceRecords((prev) => {
-          const map = new Map<string, AttendanceRecord>();
-          prev.forEach((r) => map.set(`${r.sessionId}-${r.studentId}`, r));
-          mapped.forEach((r) => map.set(`${r.sessionId}-${r.studentId}`, r));
-          return Array.from(map.values());
-        });
-      }
-
-      // Also refresh active sessions list
+      // 1. Fetch the latest 50 sessions first
       const sessRes = await client.from('attendance_sessions').select('*').order('created_at', { ascending: false }).limit(50);
+      
+      // Lightweight check of ALL existing session IDs to prevent deleting older records from student's local history
+      const allSessRes = await client.from('attendance_sessions').select('id');
+      const allExistSessionIds = new Set<string>(
+        Array.isArray(allSessRes.data) ? allSessRes.data.map((s: any) => s.id) : []
+      );
+
+      let activeSessionIds = new Set<string>();
+      
       if (Array.isArray(sessRes.data)) {
         const mappedSessions: AttendanceSession[] = sessRes.data.map((s: any) => {
           if (mutatingSessionIdsRef.current[s.id]) {
@@ -5355,7 +5385,75 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             createdAt: s.created_at || new Date().toISOString(),
           };
         });
-        setAttendanceSessions(mappedSessions);
+
+        // Merge mappedSessions (latest 50) with previous local sessions that still exist (not deleted)
+        setAttendanceSessions((prev) => {
+          const map = new Map<string, AttendanceSession>();
+          prev.forEach((s) => {
+            if (allExistSessionIds.has(s.id)) {
+              map.set(s.id, s);
+            }
+          });
+          mappedSessions.forEach((s) => {
+            map.set(s.id, s);
+          });
+          const merged = Array.from(map.values()).sort(
+            (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+          );
+          try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(merged)); } catch {}
+          return merged;
+        });
+
+        activeSessionIds = allExistSessionIds;
+      } else {
+        activeSessionIds = new Set(attendanceSessionsRef.current.map((s) => s.id));
+      }
+
+      // 2. Fetch and update attendance records, filtering out orphans of deleted sessions
+      let query = client.from('attendance_records').select('*').order('created_at', { ascending: false });
+      if (sessionId) {
+        query = query.eq('session_id', sessionId);
+      } else {
+        query = query.limit(200);
+      }
+      const res = await query;
+      if (Array.isArray(res.data)) {
+        const mapped: AttendanceRecord[] = res.data.map((r: any) => ({
+          id: r.id,
+          sessionId: r.session_id,
+          classId: r.class_id,
+          studentId: r.student_id,
+          studentName: r.student_name,
+          studentEmail: r.student_email || undefined,
+          status: r.status,
+          checkInTime: r.check_in_time || r.created_at,
+          deviceInfo: r.device_info || undefined,
+          verificationMethod: r.verification_method,
+          note: r.note || undefined,
+          proofFileUrl: r.proof_file_url || undefined,
+          proofFileName: r.proof_file_name || undefined,
+          locationVerified: r.location_verified ?? false,
+          createdAt: r.created_at || new Date().toISOString(),
+        }));
+        
+        setAttendanceRecords((prev) => {
+          const map = new Map<string, AttendanceRecord>();
+          // Only preserve previous records if their session still exists in the database
+          prev.forEach((r) => {
+            if (activeSessionIds.has(r.sessionId)) {
+              map.set(`${r.sessionId}-${r.studentId}`, r);
+            }
+          });
+          // Add/update fetched records if their session still exists in the database
+          mapped.forEach((r) => {
+            if (activeSessionIds.has(r.sessionId)) {
+              map.set(`${r.sessionId}-${r.studentId}`, r);
+            }
+          });
+          const filtered = Array.from(map.values());
+          try { localStorage.setItem(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(filtered)); } catch {}
+          return filtered;
+        });
       }
     } catch (err) {
       console.warn('refreshAttendance failed:', err);
