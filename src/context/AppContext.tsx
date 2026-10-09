@@ -175,7 +175,12 @@ interface AppContextType {
   updateQuestionBank: (id: string, updates: Partial<QuestionBankItem>) => Promise<void>;
   toggleQuestionBankStatus: (id: string) => Promise<void>;
   deleteQuestionBank: (id: string) => Promise<void>;
-  submitQuizAnswers: (quizId: string, answers: QuizSubmissionAnswer[], durationSecondsUsed?: number) => Promise<QuizSubmission>;
+  submitQuizAnswers: (
+    quizId: string,
+    answers: QuizSubmissionAnswer[],
+    durationSecondsUsed?: number,
+    overrideStudent?: { id: string; name: string; email?: string }
+  ) => Promise<QuizSubmission>;
 
   // RemindQuiz Live
   liveQuizzes: LiveQuiz[];
@@ -248,6 +253,8 @@ const STORAGE_KEYS = {
   ATTENDANCE_RECORDS: 'remindtask_global_v5_attendance_records',
   FORUM_POSTS: 'remindtask_global_v5_forum_posts',
   CLASS_CHATS: 'remindtask_global_v5_class_chats',
+  LIVE_QUIZZES: 'remindtask_global_v5_live_quizzes',
+  LIVE_QUIZ_RESPONSES: 'remindtask_global_v5_live_quiz_responses',
 };
 
 const isRealEmail = (email?: string): boolean => {
@@ -310,7 +317,7 @@ const extractSender = (a: any) => {
 };
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const mutatingSessionIdsRef = useRef<Record<string, boolean>>({});
+  const mutatingSessionActionsRef = useRef<Record<string, 'closing' | 'reopening' | 'deleting'>>({});
 
   const [classes, setClasses] = useState<ClassItem[]>(() => {
     try {
@@ -489,9 +496,36 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch {}
   }, [quizSubmissions]);
 
-  // RemindQuiz Live State
-  const [liveQuizzes, setLiveQuizzes] = useState<LiveQuiz[]>([]);
-  const [liveQuizResponses, setLiveQuizResponses] = useState<LiveQuizResponse[]>([]);
+  // Kuis Live State (Hydrated from localStorage for permanence across sessions)
+  const [liveQuizzes, setLiveQuizzes] = useState<LiveQuiz[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LIVE_QUIZZES);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LIVE_QUIZZES, JSON.stringify(liveQuizzes));
+    } catch {}
+  }, [liveQuizzes]);
+
+  const [liveQuizResponses, setLiveQuizResponses] = useState<LiveQuizResponse[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.LIVE_QUIZ_RESPONSES);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.LIVE_QUIZ_RESPONSES, JSON.stringify(liveQuizResponses));
+    } catch {}
+  }, [liveQuizResponses]);
 
   // Absensi & Presensi Digital State
   const [attendanceSessions, setAttendanceSessions] = useState<AttendanceSession[]>(() => {
@@ -1304,6 +1338,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             status: lq.status as any,
             currentQuestionIndex: lq.current_question_index || 0,
             activeQuestionEndsAt: lq.active_question_ends_at || undefined,
+            showAnswers: lq.show_answers ?? false,
             createdAt: lq.created_at,
             updatedAt: lq.updated_at,
           }));
@@ -4985,7 +5020,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const submitQuizAnswers = async (
     quizId: string,
     answers: QuizSubmissionAnswer[],
-    durationSecondsUsed = 0
+    durationSecondsUsed = 0,
+    overrideStudent?: { id: string; name: string; email?: string }
   ): Promise<QuizSubmission> => {
     const quiz = questionBanks.find((q) => q.id === quizId);
     const maxScore = quiz ? quiz.totalPoints || 100 : 100;
@@ -5002,18 +5038,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           ans.isCorrect = false;
           ans.pointsEarned = 0;
         }
+      } else if (ans.pointsEarned) {
+        totalScore += ans.pointsEarned;
       }
     });
 
     const scorePercentage = maxScore > 0 ? Math.round((totalScore / maxScore) * 100) : 0;
 
+    const studentId = overrideStudent?.id || currentUser?.id || 'member-guest';
+    const studentName = overrideStudent?.name || currentUser?.name || 'Siswa';
+    const studentEmail = overrideStudent?.email !== undefined ? overrideStudent.email : currentUser?.email;
+
     const newSub: QuizSubmission = {
       id: 'qsub-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       quizId,
       classId: quiz?.classId || currentClass?.id || '',
-      memberId: currentUser?.id || 'member-guest',
-      memberName: currentUser?.name || 'Siswa',
-      memberEmail: currentUser?.email,
+      memberId: studentId,
+      memberName: studentName,
+      memberEmail: studentEmail,
       answers,
       totalScore,
       maxScore,
@@ -5047,24 +5089,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     addActivityLog(
-      currentUser?.name || 'Siswa',
+      studentName,
       'member',
       'Mengerjakan Ujian/Kuis',
-      `Siswa ${currentUser?.name || 'Siswa'} menyelesaikan ujian "${quiz?.title || 'Kuis'}" dengan skor ${totalScore}/${maxScore} (${scorePercentage}%).`,
+      `Siswa ${studentName} menyelesaikan ujian "${quiz?.title || 'Kuis'}" dengan skor ${totalScore}/${maxScore} (${scorePercentage}%).`,
       'submission'
     );
 
-    sendCustomNotification(
-      `📥 Ujian Selesai: ${currentUser?.name || 'Siswa'}`,
-      `Siswa ${currentUser?.name || 'Siswa'} telah mengumpulkan jawaban untuk "${quiz?.title || 'Ujian'}" (Skor: ${totalScore}/${maxScore}).`,
-      'task_approved',
-      newSub.classId,
-      undefined,
-      'admin'
-    );
-
-    playNotificationSound('success');
-    showToast(`Jawaban berhasil dikumpulkan! Nilai Anda: ${totalScore}/${maxScore} (${scorePercentage}%). 🎉`, 'success');
+    if (!overrideStudent) {
+      sendCustomNotification(
+        `📥 Ujian Selesai: ${studentName}`,
+        `Siswa ${studentName} telah mengumpulkan jawaban untuk "${quiz?.title || 'Ujian'}" (Skor: ${totalScore}/${maxScore}).`,
+        'task_approved',
+        newSub.classId,
+        undefined,
+        'admin'
+      );
+      playNotificationSound('success');
+      showToast(`Jawaban berhasil dikumpulkan! Nilai Anda: ${totalScore}/${maxScore} (${scorePercentage}%). 🎉`, 'success');
+    }
 
     return newSub;
   };
@@ -5266,18 +5309,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createAttendanceSession = async (
     data: Omit<AttendanceSession, 'id' | 'createdAt' | 'secretToken'>
   ): Promise<AttendanceSession> => {
+    const nowIso = new Date().toISOString();
     const newSession: AttendanceSession = {
       ...data,
       id: 'asess-' + Date.now() + '-' + Math.random().toString(36).substring(2, 6),
       secretToken: Math.random().toString(36).substring(2, 12) + Date.now().toString(36),
-      createdAt: new Date().toISOString(),
+      createdAt: nowIso,
     };
 
-    setAttendanceSessions((prev) => [newSession, ...prev]);
+    // Close any previous active sessions in the same class to prevent multiple concurrent active sessions
+    setAttendanceSessions((prev) => {
+      const closedPrev = prev.map((s) => {
+        if ((s.classId === newSession.classId || (currentClass?.id && s.classId === currentClass.id)) && s.isActive) {
+          return { ...s, isActive: false, endTime: nowIso };
+        }
+        return s;
+      });
+      const next = [newSession, ...closedPrev];
+      attendanceSessionsRef.current = next;
+      try {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
     const client = getSupabaseClient();
     if (client) {
       try {
+        // Deactivate previous active sessions for this class in remote database
+        await client
+          .from('attendance_sessions')
+          .update({ is_active: false, end_time: nowIso })
+          .eq('class_id', newSession.classId)
+          .eq('is_active', true);
+
         await client.from('attendance_sessions').insert({
           id: newSession.id,
           class_id: newSession.classId,
@@ -5324,15 +5389,21 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const closeAttendanceSession = async (sessionId: string) => {
-    mutatingSessionIdsRef.current[sessionId] = true;
+    mutatingSessionActionsRef.current[sessionId] = 'closing';
     const endTime = new Date().toISOString();
     
-    setAttendanceSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime } : s))
-    );
+    // 1. Immediately update React state, mutable ref, and localStorage
+    setAttendanceSessions((prev) => {
+      const next = prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime } : s));
+      attendanceSessionsRef.current = next;
+      try {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
+    // 2. Persist to Supabase in background
     const client = getSupabaseClient();
-    let success = true;
     if (client) {
       try {
         const { error } = await client
@@ -5341,67 +5412,59 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .eq('id', sessionId);
           
         if (error) {
-          console.error('Supabase close session error:', error);
-          const errMsg = error.message || '';
-          const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
-            errMsg.toLowerCase().includes('network error') ||
-            errMsg.toLowerCase().includes('load failed') ||
-            errMsg.toLowerCase().includes('networkerror');
-
-          if (isNetwork) {
-            // Keep the local closed state, do not revert, show friendly local notice
-            showToast('Disimpan secara lokal. Sesi ditutup offline dan akan disinkronkan saat jaringan stabil.', 'info');
-          } else {
-            success = false;
-            showToast(`Gagal memperbarui database: ${error.message}`, 'warn');
-            // Revert local state if error
-            setAttendanceSessions((prev) =>
-              prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
-            );
+          console.warn('Supabase close session warning:', error);
+          // Try fallback upsert if the session record wasn't present on remote yet
+          const localSession = attendanceSessionsRef.current.find((s) => s.id === sessionId);
+          if (localSession) {
+            await client.from('attendance_sessions').upsert({
+              id: localSession.id,
+              class_id: localSession.classId,
+              title: localSession.title,
+              subject: localSession.subject || '',
+              date: localSession.date,
+              start_time: localSession.startTime,
+              end_time: endTime,
+              is_active: false,
+              secret_token: localSession.secretToken,
+              token_refresh_interval: localSession.tokenRefreshInterval || 15,
+              require_location: localSession.requireLocation ?? false,
+              created_by: localSession.createdBy,
+              created_by_name: localSession.createdByName || 'Admin',
+              created_at: localSession.createdAt,
+            }, { onConflict: 'id' });
           }
         }
       } catch (err: any) {
-        console.warn('Supabase attendance_sessions update error:', err);
-        const errMsg = err?.message || '';
-        const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
-          errMsg.toLowerCase().includes('network error') ||
-          errMsg.toLowerCase().includes('load failed') ||
-          errMsg.toLowerCase().includes('networkerror');
-
-        if (isNetwork) {
-          showToast('Disimpan secara lokal. Sesi ditutup offline dan akan disinkronkan saat jaringan stabil.', 'info');
-        } else {
-          success = false;
-          // Revert local state
-          setAttendanceSessions((prev) =>
-            prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
-          );
-        }
+        console.warn('Supabase attendance_sessions close error:', err);
       } finally {
         setTimeout(() => {
-          delete mutatingSessionIdsRef.current[sessionId];
-        }, 2000);
+          delete mutatingSessionActionsRef.current[sessionId];
+        }, 3500);
       }
     } else {
       setTimeout(() => {
-        delete mutatingSessionIdsRef.current[sessionId];
+        delete mutatingSessionActionsRef.current[sessionId];
       }, 500);
     }
 
-    if (success) {
-      showToast('Sesi presensi berhasil ditutup. Siswa tidak dapat lagi melakukan presensi mandiri.', 'info');
-    }
+    showToast('Sesi presensi berhasil ditutup. Siswa tidak dapat lagi melakukan presensi mandiri.', 'info');
   };
 
   const reopenAttendanceSession = async (sessionId: string) => {
-    mutatingSessionIdsRef.current[sessionId] = true;
+    mutatingSessionActionsRef.current[sessionId] = 'reopening';
     
-    setAttendanceSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s))
-    );
+    // 1. Immediately update React state, mutable ref, and localStorage
+    setAttendanceSessions((prev) => {
+      const next = prev.map((s) => (s.id === sessionId ? { ...s, isActive: true, endTime: undefined } : s));
+      attendanceSessionsRef.current = next;
+      try {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
+    // 2. Persist to Supabase in background
     const client = getSupabaseClient();
-    let success = true;
     if (client) {
       try {
         const { error } = await client
@@ -5410,61 +5473,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           .eq('id', sessionId);
           
         if (error) {
-          console.error('Supabase reopen session error:', error);
-          const errMsg = error.message || '';
-          const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
-            errMsg.toLowerCase().includes('network error') ||
-            errMsg.toLowerCase().includes('load failed') ||
-            errMsg.toLowerCase().includes('networkerror');
-
-          if (isNetwork) {
-            showToast('Disimpan secara lokal. Sesi dibuka offline dan akan disinkronkan saat jaringan stabil.', 'info');
-          } else {
-            success = false;
-            showToast(`Gagal membuka kembali sesi: ${error.message}`, 'warn');
-            // Revert local state
-            const oldSession = attendanceSessions.find((s) => s.id === sessionId);
-            setAttendanceSessions((prev) =>
-              prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
-            );
-          }
+          console.warn('Supabase reopen session warning:', error);
         }
       } catch (err: any) {
         console.warn('Supabase attendance_sessions reopen error:', err);
-        const errMsg = err?.message || '';
-        const isNetwork = errMsg.toLowerCase().includes('failed to fetch') ||
-          errMsg.toLowerCase().includes('network error') ||
-          errMsg.toLowerCase().includes('load failed') ||
-          errMsg.toLowerCase().includes('networkerror');
-
-        if (isNetwork) {
-          showToast('Disimpan secara lokal. Sesi dibuka offline dan akan disinkronkan saat jaringan stabil.', 'info');
-        } else {
-          success = false;
-          const oldSession = attendanceSessions.find((s) => s.id === sessionId);
-          setAttendanceSessions((prev) =>
-            prev.map((s) => (s.id === sessionId ? { ...s, isActive: false, endTime: oldSession?.endTime } : s))
-          );
-        }
       } finally {
         setTimeout(() => {
-          delete mutatingSessionIdsRef.current[sessionId];
-        }, 2000);
+          delete mutatingSessionActionsRef.current[sessionId];
+        }, 3500);
       }
     } else {
       setTimeout(() => {
-        delete mutatingSessionIdsRef.current[sessionId];
+        delete mutatingSessionActionsRef.current[sessionId];
       }, 500);
     }
 
-    if (success) {
-      showToast('Sesi presensi dibuka kembali!', 'success');
-    }
+    showToast('Sesi presensi berhasil dibuka kembali! Barcode aktif.', 'success');
   };
 
   const deleteAttendanceSession = async (sessionId: string) => {
-    setAttendanceSessions((prev) => prev.filter((s) => s.id !== sessionId));
-    setAttendanceRecords((prev) => prev.filter((r) => r.sessionId !== sessionId));
+    mutatingSessionActionsRef.current[sessionId] = 'deleting';
+
+    setAttendanceSessions((prev) => {
+      const next = prev.filter((s) => s.id !== sessionId);
+      attendanceSessionsRef.current = next;
+      try {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE_SESSIONS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
+
+    setAttendanceRecords((prev) => {
+      const next = prev.filter((r) => r.sessionId !== sessionId);
+      try {
+        localStorage.setItem(STORAGE_KEYS.ATTENDANCE_RECORDS, JSON.stringify(next));
+      } catch {}
+      return next;
+    });
 
     const client = getSupabaseClient();
     if (client) {
@@ -5474,7 +5519,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await client.from('attendance_sessions').delete().eq('id', sessionId);
       } catch (err) {
         console.warn('Supabase attendance_sessions delete error:', err);
+      } finally {
+        setTimeout(() => {
+          delete mutatingSessionActionsRef.current[sessionId];
+        }, 3500);
       }
+    } else {
+      setTimeout(() => {
+        delete mutatingSessionActionsRef.current[sessionId];
+      }, 500);
     }
 
     showToast('Sesi presensi beserta seluruh rekapnya berhasil dihapus.', 'info');
@@ -5698,20 +5751,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       let activeSessionIds = new Set<string>();
       
       if (Array.isArray(sessRes.data)) {
-        const mappedSessions: AttendanceSession[] = sessRes.data.map((s: any) => {
-          if (mutatingSessionIdsRef.current[s.id]) {
-            const localSession = attendanceSessionsRef.current.find((x) => x.id === s.id);
-            if (localSession) return localSession;
+        const mappedSessions: AttendanceSession[] = [];
+        sessRes.data.forEach((s: any) => {
+          const mutation = mutatingSessionActionsRef.current[s.id];
+          if (mutation === 'deleting') return;
+
+          const localSession = attendanceSessionsRef.current.find((x) => x.id === s.id);
+          let finalIsActive: boolean;
+          if (mutation === 'closing') {
+            finalIsActive = false;
+          } else if (mutation === 'reopening') {
+            finalIsActive = true;
+          } else {
+            // Trust server state unless locally closed and not yet updated
+            const dbActive = (s.is_active === true || s.is_active === 'true') && !s.end_time;
+            finalIsActive = dbActive;
           }
-          return {
+
+          mappedSessions.push({
             id: s.id,
             classId: s.class_id,
             title: s.title,
             subject: s.subject || '',
             date: s.date || (s.created_at ? s.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
             startTime: s.start_time || s.created_at,
-            endTime: s.end_time || undefined,
-            isActive: s.is_active ?? true,
+            endTime: s.end_time || (!finalIsActive ? localSession?.endTime : undefined),
+            isActive: finalIsActive,
             secretToken: s.secret_token,
             tokenRefreshInterval: s.token_refresh_interval || 15,
             requireLocation: s.require_location ?? false,
@@ -5721,7 +5786,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             createdBy: s.created_by,
             createdByName: s.created_by_name || 'Admin',
             createdAt: s.created_at || new Date().toISOString(),
-          };
+          });
         });
 
         // Merge mappedSessions (latest 50) with previous local sessions that still exist (not deleted)

@@ -22,6 +22,9 @@ import {
   Unlock,
   ChevronRight,
   BarChart2,
+  Trophy,
+  Download,
+  Calendar,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { QuestionBankItem, QuestionItem, QuestionType, QuizStatus, QuizSubmission, LiveQuiz, LiveQuizResponse } from '../../types';
@@ -65,7 +68,7 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
 
     // 2. Quiz type division check
     if (initialMode === 'live') {
-      return qb.quizType === 'kuis_live';
+      return qb.quizType === 'kuis_live' || (!qb.quizType && qb.questions.every((q) => q.type === 'pilihan_ganda'));
     } else {
       return qb.quizType === 'bank_soal' || !qb.quizType;
     }
@@ -82,9 +85,19 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
   const [viewingSubmission, setViewingSubmission] = useState<QuizSubmission | null>(null);
   const [editingQuiz, setEditingQuiz] = useState<QuestionBankItem | null>(null);
 
-  // Live Quiz States
+  // Live Quiz States & Navigation Tabs
+  const [liveTab, setLiveTab] = useState<'launch' | 'history'>('launch');
+  const [viewingHistoryQuiz, setViewingHistoryQuiz] = useState<LiveQuiz | null>(null);
   const [activeLiveQuiz, setActiveLiveQuiz] = useState<LiveQuiz | null>(null);
   const [showLiveStats, setShowLiveStats] = useState(false);
+
+  // Ended Live Quizzes for History View
+  const endedLiveQuizzes = React.useMemo(() => {
+    return liveQuizzes.filter((l) => {
+      const matchClass = !targetClassId || l.classId === targetClassId || (currentClass?.code && l.classId === currentClass.code);
+      return matchClass && l.status === 'ended';
+    });
+  }, [liveQuizzes, targetClassId, currentClass]);
 
   // Form State for Creating / Editing Question Bank
   const [formTitle, setFormTitle] = useState('');
@@ -111,18 +124,120 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
   // Reconnect to active live quiz if present
   useEffect(() => {
     const classId = currentClass?.id || currentUser?.classId || '';
-    const active = liveQuizzes.find((l) => l.classId === classId && l.status !== 'ended');
-    if (active && !activeLiveQuiz) {
-      setActiveLiveQuiz(active);
-    } else if (!active && activeLiveQuiz) {
+    // If admin is currently looking at an ended quiz (podium screen), keep it until explicitly closed
+    if (activeLiveQuiz?.status === 'ended') {
+      return;
+    }
+    // Check if the current live quiz just transitioned to ended
+    if (activeLiveQuiz) {
+      const matchInList = liveQuizzes.find((l) => l.id === activeLiveQuiz.id);
+      if (matchInList && matchInList.status === 'ended') {
+        setActiveLiveQuiz(matchInList);
+        return;
+      }
+    }
+    const ongoing = liveQuizzes.find(
+      (l) => (!classId || l.classId === classId || (currentClass?.code && l.classId === currentClass.code)) &&
+             (l.status === 'active' || l.status === 'waiting')
+    );
+    if (ongoing && !activeLiveQuiz) {
+      setActiveLiveQuiz(ongoing);
+    } else if (!ongoing && activeLiveQuiz && (activeLiveQuiz.status as string) !== 'ended') {
       setActiveLiveQuiz(null);
-    } else if (active && activeLiveQuiz) {
-      // Sync status
-      if (active.status !== activeLiveQuiz.status || active.currentQuestionIndex !== activeLiveQuiz.currentQuestionIndex) {
-        setActiveLiveQuiz(active);
+    } else if (ongoing && activeLiveQuiz && activeLiveQuiz.id === ongoing.id) {
+      if (ongoing.status !== activeLiveQuiz.status || ongoing.currentQuestionIndex !== activeLiveQuiz.currentQuestionIndex || ongoing.showAnswers !== activeLiveQuiz.showAnswers) {
+        setActiveLiveQuiz(ongoing);
       }
     }
   }, [liveQuizzes, currentClass, currentUser, activeLiveQuiz]);
+
+  const handleExportLiveQuizCsv = (targetLiveQuiz: LiveQuiz) => {
+    const quiz = questionBanks.find((q) => q.id === targetLiveQuiz.quizId);
+    const lobbyStudents = liveQuizResponses.filter(
+      (r) => r.liveQuizId === targetLiveQuiz.id && r.questionIndex === -1
+    );
+    const studentScores: Record<string, { name: string; score: number; answersCount: number }> = {};
+    lobbyStudents.forEach((student) => {
+      studentScores[student.memberId] = {
+        name: student.memberName,
+        score: 0,
+        answersCount: 0,
+      };
+    });
+    liveQuizResponses
+      .filter((r) => r.liveQuizId === targetLiveQuiz.id && r.questionIndex >= 0)
+      .forEach((res) => {
+        if (!studentScores[res.memberId]) {
+          studentScores[res.memberId] = {
+            name: res.memberName,
+            score: 0,
+            answersCount: 0,
+          };
+        }
+        studentScores[res.memberId].score += res.pointsEarned || 0;
+        studentScores[res.memberId].answersCount++;
+      });
+    const rankings = Object.entries(studentScores)
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.score - a.score);
+
+    const lines = [
+      `"REKAP PERINGKAT KUIS LIVE - ${targetLiveQuiz.title}"`,
+      `"Tanggal Sesi","${new Date(targetLiveQuiz.createdAt).toLocaleString('id-ID')}"`,
+      `"Paket Soal","${quiz?.title || targetLiveQuiz.title}"`,
+      `"Total Peserta","${rankings.length}"`,
+      '""',
+      '"Peringkat","Nama Siswa","Total Skor Poin","Jumlah Soal Terjawab"'
+    ];
+    rankings.forEach((r, idx) => {
+      lines.push(`"${idx + 1}","${r.name.replace(/"/g, '""')}","${r.score}","${r.answersCount}"`);
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `Rekap_Kuis_Live_${targetLiveQuiz.title.replace(/[^a-zA-Z0-9]/g, '_')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const getQuizLeaderboard = (targetLiveQuiz: LiveQuiz) => {
+    const lobbyStudents = liveQuizResponses.filter(
+      (r) => r.liveQuizId === targetLiveQuiz.id && r.questionIndex === -1
+    );
+    const studentScores: Record<string, { name: string; score: number; answersCount: number }> = {};
+    lobbyStudents.forEach((student) => {
+      studentScores[student.memberId] = {
+        name: student.memberName,
+        score: 0,
+        answersCount: 0,
+      };
+    });
+    liveQuizResponses
+      .filter((r) => r.liveQuizId === targetLiveQuiz.id && r.questionIndex >= 0)
+      .forEach((res) => {
+        if (!studentScores[res.memberId]) {
+          studentScores[res.memberId] = {
+            name: res.memberName,
+            score: 0,
+            answersCount: 0,
+          };
+        }
+        studentScores[res.memberId].score += res.pointsEarned || 0;
+        studentScores[res.memberId].answersCount++;
+      });
+    return Object.entries(studentScores)
+      .map(([id, data]) => ({ id, ...data }))
+      .sort((a, b) => b.score - a.score);
+  };
+
+  const handleDeleteEndedQuiz = async (quizId: string) => {
+    await deleteLiveQuiz(quizId);
+    showToast('Riwayat sesi kuis live berhasil dihapus.', 'info');
+  };
 
   const handleStartLiveQuiz = async (quiz: QuestionBankItem) => {
     try {
@@ -353,13 +468,13 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-pink-500/15 border border-pink-500/30 text-pink-300 text-xs font-bold mb-3">
                 <Sparkles className="w-3.5 h-3.5 text-pink-400" />
-                <span>Kuis Interaktif Real-Time (RemindQuiz Live)</span>
+                <span>Kuis Interaktif Real-Time</span>
               </div>
               <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
-                RemindQuiz Live 🎙️
+                Kuis Live 🎙️
               </h1>
               <p className="text-xs sm:text-sm text-slate-300 mt-2 max-w-xl leading-relaxed">
-                Pilih salah satu paket bank soal di bawah ini untuk meluncurkan sesi kuis live interaktif bergaya Kahoot dengan {terms.memberTitlePlural.toLowerCase()} Anda secara realtime!
+                Pilih salah satu paket bank soal pilihan ganda di bawah ini untuk meluncurkan sesi kuis live interaktif bergaya Kahoot secara realtime, atau lihat riwayat sesi &amp; peringkat juara terdahulu!
               </p>
             </div>
           ) : (
@@ -378,7 +493,16 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
             </div>
           )}
 
-          {initialMode !== 'live' && (
+          {initialMode === 'live' ? (
+            <button
+              type="button"
+              onClick={handleOpenCreateModal}
+              className="px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-xs shadow-lg shadow-purple-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer shrink-0 active:scale-95"
+            >
+              <Plus className="w-4 h-4 stroke-[3]" />
+              <span>Buat Soal Kuis Live Baru</span>
+            </button>
+          ) : (
             <button
               type="button"
               onClick={handleOpenCreateModal}
@@ -390,6 +514,37 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
           )}
         </div>
       </div>
+
+      {/* Sub-tabs for Kuis Live: Luncurkan vs Riwayat */}
+      {initialMode === 'live' && (
+        <div className="flex items-center gap-2 border-b border-[#291e4f] pb-3">
+          <button
+            type="button"
+            onClick={() => setLiveTab('launch')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              liveTab === 'launch'
+                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white bg-[#140f2b] border border-[#271d49]'
+            }`}
+          >
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>Luncurkan Kuis Live ({classQuestionBanks.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setLiveTab('history')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              liveTab === 'history'
+                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white bg-[#140f2b] border border-[#271d49]'
+            }`}
+          >
+            <Trophy className="w-4 h-4 text-amber-400" />
+            <span>Riwayat Sesi &amp; Peringkat ({endedLiveQuizzes.length})</span>
+          </button>
+        </div>
+      )}
 
       {/* Stats Cards */}
       {initialMode !== 'live' && (
@@ -436,249 +591,414 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
         </div>
       )}
 
-      {/* Filter and Search Bar */}
-      <div className="p-4 rounded-2xl bg-[#14102b] border border-[#271e4d] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
-        <div className="relative w-full sm:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari judul soal atau mapel..."
-            className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-[#1b1538] border border-[#2e2354] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-pink-500 transition-colors"
-          />
-        </div>
-
-        <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto scrollbar-none">
-          <div className="flex items-center gap-1 p-1 bg-[#1a1438] rounded-xl border border-[#2d2354]">
+      {/* Render Sub-tab Content: If in Live mode and History tab selected, render ended quizzes history */}
+      {initialMode === 'live' && liveTab === 'history' ? (
+        endedLiveQuizzes.length === 0 ? (
+          <div className="p-12 rounded-3xl bg-[#141029] border border-[#251d45] text-center flex flex-col items-center justify-center space-y-4">
+            <div className="w-16 h-16 rounded-3xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center">
+              <Trophy className="w-8 h-8 opacity-80" />
+            </div>
+            <div>
+              <h3 className="text-base font-bold text-white mb-1">Belum Ada Riwayat Kuis Live Selesai</h3>
+              <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+                Setelah Anda meluncurkan kuis live di tab &quot;Luncurkan Kuis Live&quot; dan menyelesaikannya bersama {terms.memberTitlePlural.toLowerCase()}, seluruh riwayat sesi, podium juara 3 besar, dan peringkat akan otomatis tersimpan rapi di sini!
+              </p>
+            </div>
             <button
-              onClick={() => setStatusFilter('all')}
-              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                statusFilter === 'all' ? 'bg-pink-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
+              type="button"
+              onClick={() => setLiveTab('launch')}
+              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md active:scale-95"
             >
-              Semua ({totalCount})
-            </button>
-            <button
-              onClick={() => setStatusFilter('published')}
-              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                statusFilter === 'published' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Terbuka ({publishedCount})
-            </button>
-            <button
-              onClick={() => setStatusFilter('hidden')}
-              className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
-                statusFilter === 'hidden' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Persembunyian ({hiddenCount})
+              <Sparkles className="w-4 h-4 text-amber-300" />
+              <span>Luncurkan Kuis Live Sekarang</span>
             </button>
           </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-400">
+                Menampilkan {endedLiveQuizzes.length} Sesi Kuis Live yang Telah Selesai
+              </span>
+            </div>
 
-          {subjects.length > 0 && (
-            <select
-              value={selectedSubject}
-              onChange={(e) => setSelectedSubject(e.target.value)}
-              className="px-3 py-2 rounded-xl bg-[#1a1438] border border-[#2d2354] text-xs text-slate-300 font-bold focus:outline-none"
-            >
-              <option value="all">Semua Mapel</option>
-              {subjects.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {endedLiveQuizzes.map((sess) => {
+                const quizDef = questionBanks.find((q) => q.id === sess.quizId);
+                const rankings = getQuizLeaderboard(sess);
+                const top1 = rankings[0];
+                const top2 = rankings[1];
+                const top3 = rankings[2];
 
-      {/* Question Banks List */}
-      {filteredQuestionBanks.length === 0 ? (
-        <div className="p-12 rounded-3xl bg-[#141029] border border-[#251d45] text-center flex flex-col items-center justify-center">
-          <div className="w-16 h-16 rounded-3xl bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-4">
-            <BookOpen className="w-8 h-8 opacity-75" />
+                return (
+                  <div
+                    key={sess.id}
+                    className="p-5 sm:p-6 rounded-3xl bg-[#14102b] border border-[#2d2252] shadow-xl hover:border-purple-500/40 transition-all flex flex-col justify-between space-y-4"
+                  >
+                    <div className="space-y-3">
+                      {/* Header Pill */}
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="px-2.5 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-purple-300 font-bold text-[10px] font-mono">
+                          {new Date(sess.createdAt).toLocaleDateString('id-ID', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                        <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 font-bold text-[10px] flex items-center gap-1">
+                          <CheckCircle2 className="w-3 h-3" />
+                          <span>Selesai &amp; Tersimpan</span>
+                        </span>
+                      </div>
+
+                      <div>
+                        <h3 className="text-base sm:text-lg font-black text-white tracking-tight leading-snug">
+                          {sess.title}
+                        </h3>
+                        {quizDef?.title && (
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            Paket Soal: <span className="text-purple-300 font-semibold">{quizDef.title}</span>
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Stats pill */}
+                      <div className="grid grid-cols-2 gap-2 p-2.5 rounded-2xl bg-[#1b1538] border border-[#2a1f4d] text-center">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold">TOTAL PESERTA</span>
+                          <span className="text-sm font-black text-pink-400">{rankings.length} {terms.memberTitle}</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold">JUMLAH SOAL</span>
+                          <span className="text-sm font-black text-amber-400">{quizDef?.totalQuestions || sess.currentQuestionIndex + 1} Soal</span>
+                        </div>
+                      </div>
+
+                      {/* Podium Preview */}
+                      <div className="p-3 rounded-2xl bg-[#120e26] border border-[#241a45] space-y-1.5">
+                        <span className="text-[9px] font-black uppercase text-slate-400 tracking-wider block mb-1">
+                          🏆 PODIUM JUARA KUIS
+                        </span>
+                        {rankings.length === 0 ? (
+                          <p className="text-xs text-slate-500 italic">Belum ada peserta menjawab</p>
+                        ) : (
+                          <div className="space-y-1 text-xs">
+                            {top1 && (
+                              <div className="flex items-center justify-between text-amber-300 font-bold bg-amber-500/10 px-2.5 py-1 rounded-lg">
+                                <span className="truncate flex items-center gap-1.5">
+                                  <span>🥇</span>
+                                  <span className="truncate">{top1.name}</span>
+                                </span>
+                                <span className="font-mono text-xs">{top1.score} Pts</span>
+                              </div>
+                            )}
+                            {top2 && (
+                              <div className="flex items-center justify-between text-slate-300 font-semibold bg-white/5 px-2.5 py-1 rounded-lg">
+                                <span className="truncate flex items-center gap-1.5">
+                                  <span>🥈</span>
+                                  <span className="truncate">{top2.name}</span>
+                                </span>
+                                <span className="font-mono text-xs">{top2.score} Pts</span>
+                              </div>
+                            )}
+                            {top3 && (
+                              <div className="flex items-center justify-between text-amber-600 font-semibold bg-amber-900/10 px-2.5 py-1 rounded-lg">
+                                <span className="truncate flex items-center gap-1.5">
+                                  <span>🥉</span>
+                                  <span className="truncate">{top3.name}</span>
+                                </span>
+                                <span className="font-mono text-xs">{top3.score} Pts</span>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="pt-2 border-t border-[#261d47] flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setViewingHistoryQuiz(sess)}
+                        className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md active:scale-95"
+                      >
+                        <Trophy className="w-3.5 h-3.5 text-amber-300" />
+                        <span>Lihat Peringkat &amp; Podium</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleExportLiveQuizCsv(sess)}
+                        className="py-2.5 px-3 rounded-xl bg-[#1f173d] hover:bg-[#2c2055] border border-[#352562] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Unduh Rekap CSV"
+                      >
+                        <Download className="w-3.5 h-3.5 text-purple-400" />
+                        <span className="hidden sm:inline">CSV</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteEndedQuiz(sess.id)}
+                        className="py-2.5 px-3 rounded-xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 text-red-400 text-xs font-bold flex items-center justify-center transition-colors cursor-pointer"
+                        title="Hapus riwayat sesi ini"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <h3 className="text-base font-bold text-white mb-1">Belum Ada Bank Soal</h3>
-          <p className="text-xs text-slate-400 max-w-sm mb-5 leading-relaxed">
-            Mulai susun paket soal ujian, kuis pilihan ganda, dan uraian essay. Anda bisa menyimpannya secara rahasia di persembunyian terlebih dahulu!
-          </p>
-          <button
-            type="button"
-            onClick={handleOpenCreateModal}
-            className="px-4 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-pink-500/20"
-          >
-            <Plus className="w-4 h-4 stroke-[3]" />
-            <span>Buat Soal Pertama Sekarang</span>
-          </button>
-        </div>
+        )
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredQuestionBanks.map((quiz) => {
-            const isHidden = quiz.status === 'hidden';
-            const mcCount = quiz.questions.filter((q) => q.type === 'pilihan_ganda').length;
-            const essayCount = quiz.questions.filter((q) => q.type === 'essay').length;
-            const submissionCount = quizSubmissions.filter((qs) => qs.quizId === quiz.id).length;
+        <>
+          {/* Filter and Search Bar */}
+          <div className="p-4 rounded-2xl bg-[#14102b] border border-[#271e4d] flex flex-col sm:flex-row items-center justify-between gap-3 shadow-md">
+            <div className="relative w-full sm:w-80">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Cari judul soal atau mapel..."
+                className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-[#1b1538] border border-[#2e2354] text-xs text-white placeholder-slate-500 focus:outline-none focus:border-pink-500 transition-colors"
+              />
+            </div>
 
-            return (
-              <div
-                key={quiz.id}
-                className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
-                  isHidden
-                    ? 'bg-[#151128]/95 border-amber-500/30 shadow-lg shadow-amber-500/5'
-                    : 'bg-[#14102b] border-[#2d2252] shadow-xl hover:border-pink-500/40'
-                }`}
-              >
-                <div>
-                  {/* Status Banner / Pill */}
-                  <div className="flex items-center justify-between gap-3 mb-3.5">
-                    <div className="flex items-center gap-2">
-                      {quiz.subject && (
-                        <span className="px-2.5 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-purple-300 font-bold text-[10px]">
-                          {quiz.subject}
-                        </span>
-                      )}
-                      <span className="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        <span>{quiz.durationMinutes > 0 ? `${quiz.durationMinutes} Menit` : 'Tanpa Batas Waktu'}</span>
-                      </span>
-                      {quiz.timeLimitPerQuestionSeconds && quiz.timeLimitPerQuestionSeconds > 0 ? (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] font-mono flex items-center gap-1">
-                          <Clock className="w-2.5 h-2.5 text-amber-400" />
-                          <span>{quiz.timeLimitPerQuestionSeconds}s / soal</span>
-                        </span>
-                      ) : null}
-                    </div>
-
-                    {/* Secret vs Published Pill */}
-                    {isHidden ? (
-                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[11px] font-black">
-                        <Lock className="w-3.5 h-3.5" />
-                        <span>Di Persembunyian (Rahasia)</span>
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] font-black">
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Terbuka untuk {terms.memberTitle}</span>
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Title and Description */}
-                  <h3 className="text-base sm:text-lg font-black text-white tracking-tight leading-snug mb-2">
-                    {quiz.title}
-                  </h3>
-                  {quiz.description && (
-                    <p className="text-xs text-slate-300 line-clamp-2 mb-3.5 leading-relaxed">
-                      {quiz.description}
-                    </p>
-                  )}
-
-                  {/* Question Stats Breakdown */}
-                  <div className="grid grid-cols-3 gap-2 p-3 rounded-2xl bg-[#1b1538] border border-[#2a1f4d] mb-4 text-center">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">PILIHAN GANDA</span>
-                      <span className="text-sm font-black text-pink-400">{mcCount} Soal</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">ESSAY</span>
-                      <span className="text-sm font-black text-purple-300">{essayCount} Soal</span>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">TOTAL POIN</span>
-                      <span className="text-sm font-black text-amber-400">{quiz.totalPoints} Poin</span>
-                    </div>
-                  </div>
-
-                  {/* Privacy notice info */}
-                  {isHidden && (
-                    <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 text-[11px] flex items-center gap-2 mb-4">
-                      <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-                      <span>{terms.memberTitle} kelas tidak dapat melihat soal ini sampai Anda mengklik tombol "Buka Soal".</span>
-                    </div>
-                  )}
-                </div>
-
-                {/* Card Actions */}
-                <div className="space-y-2 pt-2 border-t border-[#261d47]">
-                  {initialMode === 'live' ? (
-                    /* Live Quiz Launcher */
-                    <button
-                      type="button"
-                      onClick={() => handleStartLiveQuiz(quiz)}
-                      className="w-full py-3 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/20 active:scale-95 mb-1"
-                    >
-                      <Sparkles className="w-4 h-4 text-amber-300 animate-pulse stroke-[2.5]" />
-                      <span>Mulai Kuis Live (RemindQuiz Live) 🎙️</span>
-                    </button>
-                  ) : (
-                    /* Primary Toggle: Buka vs Sembunyikan */
-                    <button
-                      type="button"
-                      onClick={() => toggleQuestionBankStatus(quiz.id)}
-                      className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
-                        isHidden
-                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20'
-                          : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-500/20'
-                      }`}
-                    >
-                      {isHidden ? (
-                        <>
-                          <Unlock className="w-4 h-4 stroke-[2.5]" />
-                          <span>Buka Soal untuk {terms.memberTitle} 🚀</span>
-                        </>
-                      ) : (
-                        <>
-                          <Lock className="w-4 h-4 stroke-[2.5]" />
-                          <span>Kunci &amp; Simpan ke Persembunyian 🔒</span>
-                        </>
-                      )}
-                    </button>
-                  )}
-
-                  {/* Secondary Actions (History/Hasil, Edit, Hapus - ALWAYS visible in both modes!) */}
-                  <div className="grid grid-cols-3 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedQuizForSubmissions(quiz);
-                        setIsSubmissionsModalOpen(true);
-                      }}
-                      className="py-2 px-2.5 rounded-xl bg-[#20183f] hover:bg-[#2b2154] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 border border-[#31255c] transition-colors cursor-pointer"
-                      title={`Lihat hasil ${terms.memberTitle.toLowerCase()}`}
-                    >
-                      <Award className="w-3.5 h-3.5 text-amber-400" />
-                      <span className="truncate">Hasil ({submissionCount})</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenEditModal(quiz)}
-                      className="py-2 px-2.5 rounded-xl bg-[#20183f] hover:bg-[#2b2154] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 border border-[#31255c] transition-colors cursor-pointer"
-                    >
-                      <Edit3 className="w-3.5 h-3.5 text-pink-400" />
-                      <span>Edit</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (confirm(`Hapus bank soal "${quiz.title}"? Seluruh butir soal dan data nilai ujian ini akan dihapus permanen.`)) {
-                          deleteQuestionBank(quiz.id);
-                        }
-                      }}
-                      className="py-2 px-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold flex items-center justify-center gap-1.5 border border-red-500/25 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Hapus</span>
-                    </button>
-                  </div>
-                </div>
+            <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto scrollbar-none">
+              <div className="flex items-center gap-1 p-1 bg-[#1a1438] rounded-xl border border-[#2d2354]">
+                <button
+                  onClick={() => setStatusFilter('all')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    statusFilter === 'all' ? 'bg-pink-500 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Semua ({totalCount})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('published')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    statusFilter === 'published' ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Terbuka ({publishedCount})
+                </button>
+                <button
+                  onClick={() => setStatusFilter('hidden')}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                    statusFilter === 'hidden' ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  Persembunyian ({hiddenCount})
+                </button>
               </div>
-            );
-          })}
-        </div>
+
+              {subjects.length > 0 && (
+                <select
+                  value={selectedSubject}
+                  onChange={(e) => setSelectedSubject(e.target.value)}
+                  className="px-3 py-2 rounded-xl bg-[#1a1438] border border-[#2d2354] text-xs text-slate-300 font-bold focus:outline-none"
+                >
+                  <option value="all">Semua Mapel</option>
+                  {subjects.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </div>
+
+          {/* Question Banks List */}
+          {filteredQuestionBanks.length === 0 ? (
+            <div className="p-12 rounded-3xl bg-[#141029] border border-[#251d45] text-center flex flex-col items-center justify-center">
+              <div className="w-16 h-16 rounded-3xl bg-purple-500/10 border border-purple-500/20 text-purple-400 flex items-center justify-center mb-4">
+                <BookOpen className="w-8 h-8 opacity-75" />
+              </div>
+              <h3 className="text-base font-bold text-white mb-1">Belum Ada Bank Soal</h3>
+              <p className="text-xs text-slate-400 max-w-sm mb-5 leading-relaxed">
+                Mulai susun paket soal ujian, kuis pilihan ganda, dan uraian essay. Anda bisa menyimpannya secara rahasia di persembunyian terlebih dahulu!
+              </p>
+              <button
+                type="button"
+                onClick={handleOpenCreateModal}
+                className="px-4 py-2.5 rounded-xl bg-pink-500 hover:bg-pink-600 text-white text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-md shadow-pink-500/20"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>Buat Soal Pertama Sekarang</span>
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {filteredQuestionBanks.map((quiz) => {
+                const isHidden = quiz.status === 'hidden';
+                const mcCount = quiz.questions.filter((q) => q.type === 'pilihan_ganda').length;
+                const essayCount = quiz.questions.filter((q) => q.type === 'essay').length;
+                const submissionCount = quizSubmissions.filter((qs) => qs.quizId === quiz.id).length;
+
+                return (
+                  <div
+                    key={quiz.id}
+                    className={`p-5 sm:p-6 rounded-3xl border transition-all duration-200 flex flex-col justify-between ${
+                      isHidden
+                        ? 'bg-[#151128]/95 border-amber-500/30 shadow-lg shadow-amber-500/5'
+                        : 'bg-[#14102b] border-[#2d2252] shadow-xl hover:border-pink-500/40'
+                    }`}
+                  >
+                    <div>
+                      {/* Status Banner / Pill */}
+                      <div className="flex items-center justify-between gap-3 mb-3.5">
+                        <div className="flex items-center gap-2">
+                          {quiz.subject && (
+                            <span className="px-2.5 py-0.5 rounded-md bg-purple-500/15 border border-purple-500/30 text-purple-300 font-bold text-[10px]">
+                              {quiz.subject}
+                            </span>
+                          )}
+                          <span className="text-[10px] text-slate-400 flex items-center gap-1 font-mono">
+                            <Clock className="w-3 h-3 text-slate-400" />
+                            <span>{quiz.durationMinutes > 0 ? `${quiz.durationMinutes} Menit` : 'Tanpa Batas Waktu'}</span>
+                          </span>
+                          {quiz.timeLimitPerQuestionSeconds && quiz.timeLimitPerQuestionSeconds > 0 ? (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px] font-mono flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5 text-amber-400" />
+                              <span>{quiz.timeLimitPerQuestionSeconds}s / soal</span>
+                            </span>
+                          ) : null}
+                        </div>
+
+                        {/* Secret vs Published Pill */}
+                        {isHidden ? (
+                          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[11px] font-black">
+                            <Lock className="w-3.5 h-3.5" />
+                            <span>Di Persembunyian (Rahasia)</span>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/40 text-emerald-300 text-[11px] font-black">
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Terbuka untuk {terms.memberTitle}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Title and Description */}
+                      <h3 className="text-base sm:text-lg font-black text-white tracking-tight leading-snug mb-2">
+                        {quiz.title}
+                      </h3>
+                      {quiz.description && (
+                        <p className="text-xs text-slate-300 line-clamp-2 mb-3.5 leading-relaxed">
+                          {quiz.description}
+                        </p>
+                      )}
+
+                      {/* Question Stats Breakdown */}
+                      <div className="grid grid-cols-3 gap-2 p-3 rounded-2xl bg-[#1b1538] border border-[#2a1f4d] mb-4 text-center">
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold">PILIHAN GANDA</span>
+                          <span className="text-sm font-black text-pink-400">{mcCount} Soal</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold">ESSAY</span>
+                          <span className="text-sm font-black text-purple-300">{essayCount} Soal</span>
+                        </div>
+                        <div>
+                          <span className="text-[10px] text-slate-400 block font-bold">TOTAL POIN</span>
+                          <span className="text-sm font-black text-amber-400">{quiz.totalPoints} Poin</span>
+                        </div>
+                      </div>
+
+                      {/* Privacy notice info */}
+                      {isHidden && (
+                        <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/30 text-amber-300 text-[11px] flex items-center gap-2 mb-4">
+                          <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                          <span>{terms.memberTitle} kelas tidak dapat melihat soal ini sampai Anda mengklik tombol "Buka Soal".</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Card Actions */}
+                    <div className="space-y-2 pt-2 border-t border-[#261d47]">
+                      {initialMode === 'live' ? (
+                        /* Live Quiz Launcher */
+                        <button
+                          type="button"
+                          onClick={() => handleStartLiveQuiz(quiz)}
+                          className="w-full py-3 px-3 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-black text-sm flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-purple-500/20 active:scale-95 mb-1"
+                        >
+                          <Sparkles className="w-4 h-4 text-amber-300 animate-pulse stroke-[2.5]" />
+                          <span>Mulai Kuis Live 🎙️</span>
+                        </button>
+                      ) : (
+                        /* Primary Toggle: Buka vs Sembunyikan */
+                        <button
+                          type="button"
+                          onClick={() => toggleQuestionBankStatus(quiz.id)}
+                          className={`w-full py-2.5 px-3 rounded-xl font-black text-xs flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm ${
+                            isHidden
+                              ? 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white shadow-emerald-500/20'
+                              : 'bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white shadow-amber-500/20'
+                          }`}
+                        >
+                          {isHidden ? (
+                            <>
+                              <Unlock className="w-4 h-4 stroke-[2.5]" />
+                              <span>Buka Soal untuk {terms.memberTitle} 🚀</span>
+                            </>
+                          ) : (
+                            <>
+                              <Lock className="w-4 h-4 stroke-[2.5]" />
+                              <span>Kunci &amp; Simpan ke Persembunyian 🔒</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {/* Secondary Actions (History/Hasil, Edit, Hapus - ALWAYS visible in both modes!) */}
+                      <div className="grid grid-cols-3 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedQuizForSubmissions(quiz);
+                            setIsSubmissionsModalOpen(true);
+                          }}
+                          className="py-2 px-2.5 rounded-xl bg-[#20183f] hover:bg-[#2b2154] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 border border-[#31255c] transition-colors cursor-pointer"
+                          title={`Lihat hasil ${terms.memberTitle.toLowerCase()}`}
+                        >
+                          <Award className="w-3.5 h-3.5 text-amber-400" />
+                          <span className="truncate">Hasil ({submissionCount})</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEditModal(quiz)}
+                          className="py-2 px-2.5 rounded-xl bg-[#20183f] hover:bg-[#2b2154] text-slate-200 text-xs font-bold flex items-center justify-center gap-1.5 border border-[#31255c] transition-colors cursor-pointer"
+                        >
+                          <Edit3 className="w-3.5 h-3.5 text-pink-400" />
+                          <span>Edit</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (confirm(`Hapus bank soal "${quiz.title}"? Seluruh butir soal dan data nilai ujian ini akan dihapus permanen.`)) {
+                              deleteQuestionBank(quiz.id);
+                            }
+                          }}
+                          className="py-2 px-2.5 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 text-xs font-bold flex items-center justify-center gap-1.5 border border-red-500/20 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          <span>Hapus</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {/* MODAL 1: CREATE / EDIT QUESTION BANK */}
@@ -1365,15 +1685,185 @@ export const QuestionBankAdminView: React.FC<{ initialMode?: 'normal' | 'live' }
           submitQuizAnswers={useApp().submitQuizAnswers}
           setLiveQuizShowAnswers={setLiveQuizShowAnswers}
           setLiveQuizTimer={setLiveQuizTimer}
+          setLiveTab={setLiveTab}
         />
       )}
+
+      {/* MODAL: DETAIL RIWAYAT SESI & PODIUM JUARA (ADMIN POV) */}
+      {viewingHistoryQuiz && (() => {
+        const rankings = getQuizLeaderboard(viewingHistoryQuiz);
+        const top1 = rankings[0];
+        const top2 = rankings[1];
+        const top3 = rankings[2];
+
+        return (
+          <div className="fixed inset-0 z-[100] bg-black/80 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200">
+            <div className="w-full max-w-3xl rounded-3xl bg-[#130d2b] border border-[#3b2569] shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+              {/* Header */}
+              <div className="p-5 sm:p-6 border-b border-[#291b4f] flex items-center justify-between bg-gradient-to-r from-[#1c123d] to-[#140e2d]">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                    <Trophy className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <span className="text-[10px] font-black uppercase text-amber-400 tracking-wider">
+                      RIWAYAT PODIUM &amp; PERINGKAT KUIS LIVE
+                    </span>
+                    <h2 className="text-lg sm:text-xl font-black text-white">{viewingHistoryQuiz.title}</h2>
+                    <p className="text-xs text-slate-400">
+                      {new Date(viewingHistoryQuiz.createdAt).toLocaleString('id-ID')} • {rankings.length} Peserta {terms.memberTitle}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleExportLiveQuizCsv(viewingHistoryQuiz)}
+                    className="px-3.5 py-2 rounded-xl bg-[#221845] hover:bg-[#2e205c] border border-[#392873] text-purple-300 hover:text-white text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4 text-purple-400" />
+                    <span className="hidden sm:inline">Unduh CSV</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setViewingHistoryQuiz(null)}
+                    className="p-2 rounded-xl text-slate-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Body */}
+              <div className="p-5 sm:p-6 overflow-y-auto space-y-6">
+                {/* 3D-like Stacked Podium */}
+                {rankings.length > 0 && (
+                  <div className="p-6 rounded-3xl bg-[#0c081e] border border-[#231744] text-center">
+                    <span className="text-xs font-black uppercase text-slate-400 tracking-widest block mb-4">
+                      🏆 PODIUM JUARA 3 BESAR
+                    </span>
+                    <div className="flex items-end justify-center gap-3 max-w-md mx-auto pt-4 pb-2">
+                      {/* 2nd Place */}
+                      {top2 ? (
+                        <div className="flex flex-col items-center gap-1.5 flex-1">
+                          <span className="text-xs font-black text-slate-300 truncate max-w-[100px]" title={top2.name}>
+                            🥈 {top2.name}
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-bold">{top2.score} pts</span>
+                          <div className="w-full h-24 rounded-t-2xl bg-gradient-to-t from-slate-600/30 to-slate-400/40 border-t-2 border-slate-300 flex items-center justify-center font-black text-slate-300 text-base shadow-lg">
+                            2
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 opacity-20 h-16 border-t border-dashed border-slate-600" />
+                      )}
+
+                      {/* 1st Place */}
+                      {top1 ? (
+                        <div className="flex flex-col items-center gap-1.5 flex-1">
+                          <span className="text-sm font-black text-amber-300 truncate max-w-[120px]" title={top1.name}>
+                            🥇 {top1.name}
+                          </span>
+                          <span className="text-xs text-amber-400 font-black">{top1.score} pts</span>
+                          <div className="w-full h-32 rounded-t-2xl bg-gradient-to-t from-amber-600/30 to-amber-400/40 border-t-2 border-amber-400 flex items-center justify-center font-black text-amber-400 text-xl shadow-2xl relative">
+                            <div className="absolute -top-3.5 text-lg animate-bounce">👑</div>
+                            1
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 opacity-20 h-20 border-t border-dashed border-slate-600" />
+                      )}
+
+                      {/* 3rd Place */}
+                      {top3 ? (
+                        <div className="flex flex-col items-center gap-1.5 flex-1">
+                          <span className="text-xs font-black text-amber-600 truncate max-w-[100px]" title={top3.name}>
+                            🥉 {top3.name}
+                          </span>
+                          <span className="text-[10px] text-amber-700 font-bold">{top3.score} pts</span>
+                          <div className="w-full h-16 rounded-t-2xl bg-gradient-to-t from-amber-800/30 to-amber-700/40 border-t-2 border-amber-700 flex items-center justify-center font-black text-amber-600 text-sm shadow-md">
+                            3
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex-1 opacity-20 h-12 border-t border-dashed border-slate-600" />
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Complete Leaderboard Table */}
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-black uppercase text-slate-300 tracking-wider">
+                      Daftar Lengkap Peringkat Peserta ({rankings.length})
+                    </h4>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      Urut berdasarkan total perolehan skor
+                    </span>
+                  </div>
+
+                  {rankings.length === 0 ? (
+                    <div className="p-8 rounded-2xl bg-[#0e0a22] border border-[#231742] text-center text-slate-500 text-xs">
+                      Tidak ada peserta yang tercatat pada sesi kuis ini.
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl border border-[#281b4d] overflow-hidden bg-[#0e0a22]">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="border-b border-[#231742] bg-[#171033] text-slate-400 text-[10px] uppercase font-bold">
+                            <th className="py-2.5 px-3 text-center w-14">Rank</th>
+                            <th className="py-2.5 px-3">Nama {terms.memberTitle}</th>
+                            <th className="py-2.5 px-3 text-right">Skor Poin</th>
+                            <th className="py-2.5 px-3 text-center">Soal Dijawab</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#1f153a]">
+                          {rankings.map((stud: any, idx: number) => (
+                            <tr key={stud.id} className="hover:bg-white/[0.03] transition-colors">
+                              <td className="py-2.5 px-3 text-center font-bold">
+                                {idx === 0 ? '🥇 1' : idx === 1 ? '🥈 2' : idx === 2 ? '🥉 3' : `${idx + 1}`}
+                              </td>
+                              <td className="py-2.5 px-3 font-semibold text-white">
+                                {stud.name}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-mono font-bold text-amber-400">
+                                {stud.score}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-slate-400 font-mono">
+                                {stud.answersCount}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-[#291b4f] flex justify-end bg-[#0f0a24]">
+                <button
+                  type="button"
+                  onClick={() => setViewingHistoryQuiz(null)}
+                  className="px-5 py-2.5 rounded-xl bg-[#221845] hover:bg-[#2f215d] text-white text-xs font-bold transition-all cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 };
 
 interface LiveQuizTeacherDashboardProps {
   activeLiveQuiz: LiveQuiz;
-  setActiveLiveQuiz: (val: LiveQuiz | null) => void;
+  setActiveLiveQuiz: (val: LiveQuiz | null | ((prev: LiveQuiz | null) => LiveQuiz | null)) => void;
   showLiveStats: boolean;
   setShowLiveStats: (val: boolean) => void;
   liveQuizResponses: LiveQuizResponse[];
@@ -1385,6 +1875,7 @@ interface LiveQuizTeacherDashboardProps {
   submitQuizAnswers: any;
   setLiveQuizShowAnswers: (id: string, show: boolean) => Promise<void>;
   setLiveQuizTimer: (id: string, seconds: number) => Promise<void>;
+  setLiveTab?: (val: 'launch' | 'history') => void;
 }
 
 const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
@@ -1401,6 +1892,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
   submitQuizAnswers,
   setLiveQuizShowAnswers,
   setLiveQuizTimer,
+  setLiveTab,
 }) => {
   const [isConfirmExitOpen, setIsConfirmExitOpen] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState<number>(0);
@@ -1501,6 +1993,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
 
   const handleNextQuestion = async () => {
     if (isLastQuestion) {
+      setActiveLiveQuiz({ ...activeLiveQuiz, status: 'ended' });
       await updateLiveQuizStatus(activeLiveQuiz.id, 'ended');
       showToast('Kuis selesai! Mari kita lihat sang juara di podium! 🏆', 'success');
     } else {
@@ -1524,7 +2017,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
   const handleSaveToGradebook = async () => {
     if (!quiz) return;
     try {
-      // Loop through participating students and submit their final scores to normal submissions
+      // Loop through participating students and submit their final scores with actual student IDs
       for (const entry of leaderboard) {
         const studentResponses = liveQuizResponses.filter(
           (r) => r.liveQuizId === activeLiveQuiz.id && r.memberId === entry.id && r.questionIndex >= 0
@@ -1541,12 +2034,16 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
           };
         });
 
-        // We can craft a standard QuizSubmission on behalf of the student
-        await submitQuizAnswers(quiz.id, submissionAnswers, 0); // Saves globally
+        // Save properly with student credentials so gradebook reflects individual students
+        await submitQuizAnswers(quiz.id, submissionAnswers, 0, {
+          id: entry.id,
+          name: entry.name,
+        });
       }
-      showToast('Seluruh nilai kuis live berhasil diintegrasikan ke Rekap Tugas Kelas! 💾', 'success');
-      await deleteLiveQuiz(activeLiveQuiz.id);
+      showToast('Seluruh nilai kuis live berhasil diintegrasikan ke Rekap Tugas Kelas & tersimpan di Riwayat Sesi! 💾', 'success');
+      // DO NOT delete activeLiveQuiz — keep it ended in history!
       setActiveLiveQuiz(null);
+      setLiveTab?.('history');
     } catch (err) {
       showToast('Gagal merekam nilai. Silakan coba lagi.', 'warn');
     }
@@ -1557,9 +2054,14 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
   };
 
   const handleConfirmExit = async () => {
-    await deleteLiveQuiz(activeLiveQuiz.id);
+    // If exiting, end the quiz so history is kept, do not wipe data
+    if (activeLiveQuiz.status === 'active' || activeLiveQuiz.status === 'waiting') {
+      await updateLiveQuizStatus(activeLiveQuiz.id, 'ended');
+    }
     setActiveLiveQuiz(null);
     setIsConfirmExitOpen(false);
+    setLiveTab?.('history');
+    showToast('Sesi kuis ditutup. Riwayat sesi dan perolehan skor tersimpan di Riwayat Sesi & Peringkat.', 'info');
   };
 
   if (!quiz) return null;
@@ -1933,13 +2435,14 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
               
               <button
                 type="button"
-                onClick={async () => {
-                  await deleteLiveQuiz(activeLiveQuiz.id);
+                onClick={() => {
                   setActiveLiveQuiz(null);
+                  setLiveTab?.('history');
+                  showToast('Sesi kuis ditutup. Riwayat sesi dan perolehan skor tersimpan di Riwayat Sesi & Peringkat.', 'info');
                 }}
                 className="px-6 py-3.5 rounded-2xl bg-[#1e173e] hover:bg-[#2b2158] border border-[#3b2374] text-slate-300 font-bold text-xs sm:text-sm active:scale-95 transition-all cursor-pointer"
               >
-                Keluar Tanpa Menyimpan ❌
+                Tutup &amp; Lihat Riwayat Sesi 🏁
               </button>
             </div>
           </div>
@@ -1964,9 +2467,9 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
               ⚠️
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-black text-white">Matikan Sesi Kuis Live?</h3>
+              <h3 className="text-base font-black text-white">Akhiri Sesi Kuis Live?</h3>
               <p className="text-xs text-slate-300 leading-relaxed">
-                Apakah Anda yakin ingin mematikan sesi kuis live ini? Seluruh riwayat jawaban real-time siswa saat ini akan dihapus permanen.
+                Apakah Anda yakin ingin mengakhiri sesi kuis live ini? Sesi akan diselesaikan dan riwayat skor serta peringkat peserta akan otomatis tersimpan di tab Riwayat Sesi &amp; Peringkat.
               </p>
             </div>
             <div className="grid grid-cols-2 gap-2 pt-2">
@@ -1975,7 +2478,7 @@ const LiveQuizTeacherDashboard: React.FC<LiveQuizTeacherDashboardProps> = ({
                 onClick={handleConfirmExit}
                 className="py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-black transition-all cursor-pointer shadow-lg shadow-red-600/20 active:scale-95"
               >
-                Ya, Matikan Kuis
+                Ya, Akhiri Kuis
               </button>
               <button
                 type="button"

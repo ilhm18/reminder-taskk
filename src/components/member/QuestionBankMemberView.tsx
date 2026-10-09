@@ -67,9 +67,24 @@ export const QuestionBankMemberView: React.FC<{ initialMode?: 'normal' | 'live' 
   const [isLiveSubmitted, setIsLiveSubmitted] = useState(false);
   const [liveSecondsLeft, setLiveSecondsLeft] = useState<number>(0);
 
-  // Find if there is an active live quiz in the class (including waiting, active, or ended)
+  // Find active or joined live quiz in member's class
   const classId = currentClass?.id || currentUser?.classId || '';
-  const activeDbLiveQuiz = liveQuizzes.find((l) => l.classId === classId);
+  const activeDbLiveQuiz = React.useMemo(() => {
+    // If student has already joined a live quiz session, keep tracking that session until they exit
+    if (joinedLiveQuizId) {
+      const matched = liveQuizzes.find((l) => l.id === joinedLiveQuizId);
+      if (matched) return matched;
+    }
+
+    // Otherwise, look for an ONGOING live quiz (status is 'waiting' or 'active') in member's class
+    const ongoing = liveQuizzes.find((l) => {
+      const isClassMatch = !classId || l.classId === classId || (currentClass?.code && l.classId === currentClass.code);
+      return isClassMatch && (l.status === 'waiting' || l.status === 'active');
+    });
+    if (ongoing) return ongoing;
+
+    return null;
+  }, [liveQuizzes, classId, currentClass, joinedLiveQuizId]);
 
   // Sync state if active live quiz ends (e.g., deleted entirely)
   useEffect(() => {

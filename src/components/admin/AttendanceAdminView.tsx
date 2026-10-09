@@ -111,6 +111,28 @@ export const AttendanceAdminView: React.FC = () => {
     return classSessions.find((s) => s.id === effectiveSessionId) || null;
   }, [classSessions, effectiveSessionId]);
 
+  // Safe wrappers for session status toggle that preserve selection
+  const handleCloseSession = async (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    if (isProjectorFullscreen) {
+      setIsProjectorFullscreen(false);
+    }
+    try {
+      await closeAttendanceSession(sessionId);
+    } catch (err) {
+      console.error('Error closing session:', err);
+    }
+  };
+
+  const handleReopenSession = async (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    try {
+      await reopenAttendanceSession(sessionId);
+    } catch (err) {
+      console.error('Error reopening session:', err);
+    }
+  };
+
   // Records for current selected session
   const currentRecords = useMemo(() => {
     if (!currentSession) return [];
@@ -736,7 +758,7 @@ export const AttendanceAdminView: React.FC = () => {
                         {currentSession.isActive ? (
                           <button
                             type="button"
-                            onClick={() => closeAttendanceSession(currentSession.id)}
+                            onClick={() => handleCloseSession(currentSession.id)}
                             className="px-3 py-1.5 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
                             <Square className="w-3.5 h-3.5" />
@@ -745,7 +767,7 @@ export const AttendanceAdminView: React.FC = () => {
                         ) : (
                           <button
                             type="button"
-                            onClick={() => reopenAttendanceSession(currentSession.id)}
+                            onClick={() => handleReopenSession(currentSession.id)}
                             className="px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
                           >
                             <Play className="w-3.5 h-3.5" />
@@ -1074,6 +1096,27 @@ export const AttendanceAdminView: React.FC = () => {
                             >
                               {currentSession.isActive ? '🟢 Sesi Aktif' : '⚪ Selesai / Ditutup'}
                             </span>
+                            {currentSession.isActive ? (
+                              <button
+                                type="button"
+                                onClick={() => handleCloseSession(currentSession.id)}
+                                className="px-2.5 py-1 rounded-lg bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Tutup / Akhiri sesi presensi ini"
+                              >
+                                <Square className="w-3 h-3" />
+                                <span>Tutup Sesi</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleReopenSession(currentSession.id)}
+                                className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Buka kembali sesi presensi ini"
+                              >
+                                <Play className="w-3 h-3" />
+                                <span>Buka Sesi</span>
+                              </button>
+                            )}
                           </div>
                           <div className="flex items-center gap-2 text-xs text-slate-400 mt-1 flex-wrap">
                             <span className="font-mono font-bold text-pink-300 bg-pink-500/10 px-2 py-0.5 rounded-md border border-pink-500/20 flex items-center gap-1">
@@ -1510,6 +1553,27 @@ export const AttendanceAdminView: React.FC = () => {
                         >
                           Lihat Rekap
                         </button>
+                        {sess.isActive ? (
+                          <button
+                            type="button"
+                            onClick={() => handleCloseSession(sess.id)}
+                            className="px-2.5 py-1.5 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                            title="Tutup / Akhiri sesi presensi ini"
+                          >
+                            <Square className="w-3 h-3" />
+                            <span>Tutup</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleReopenSession(sess.id)}
+                            className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-colors cursor-pointer flex items-center gap-1"
+                            title="Buka kembali sesi presensi ini"
+                          >
+                            <Play className="w-3 h-3" />
+                            <span>Buka</span>
+                          </button>
+                        )}
                       </div>
 
                       <button
@@ -1795,47 +1859,89 @@ export const AttendanceAdminView: React.FC = () => {
                 <h2 className="text-xl sm:text-2xl font-black text-white">{currentSession.title}</h2>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setIsProjectorFullscreen(false)}
-              className="p-3 rounded-2xl bg-[#1d1538] hover:bg-[#2d2054] text-white border border-[#372663] cursor-pointer transition-all"
-              title="Tutup Layar Penuh"
-            >
-              <Minimize2 className="w-5 h-5" />
-            </button>
+            <div className="flex items-center gap-2">
+              {currentSession.isActive && (
+                <button
+                  type="button"
+                  onClick={() => handleCloseSession(currentSession.id)}
+                  className="px-3.5 py-2 rounded-xl bg-red-500/20 hover:bg-red-500/30 border border-red-500/40 text-red-300 font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-colors shadow-md"
+                  title="Akhiri / Tutup sesi presensi ini"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  <span>Akhiri Sesi Presensi</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsProjectorFullscreen(false)}
+                className="p-3 rounded-2xl bg-[#1d1538] hover:bg-[#2d2054] text-white border border-[#372663] cursor-pointer transition-all"
+                title="Tutup Layar Penuh"
+              >
+                <Minimize2 className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* Center High-Contrast QR Code */}
           <div className="my-auto flex flex-col items-center space-y-4">
-            <div className="p-6 sm:p-8 rounded-3xl bg-white border-8 border-pink-500 shadow-2xl shadow-pink-500/30 flex flex-col items-center max-w-md w-full">
-              {qrCodeDataUrl ? (
-                <img
-                  src={qrCodeDataUrl}
-                  alt="QR Code Proyektor"
-                  className="w-72 h-72 sm:w-88 sm:h-88 object-contain"
-                />
-              ) : (
-                <div className="w-72 h-72 sm:w-88 sm:h-88 flex items-center justify-center text-slate-400">
-                  <RefreshCw className="w-10 h-10 animate-spin" />
-                </div>
-              )}
-
-              <div className="w-full mt-4 pt-3 border-t border-slate-200 space-y-2">
-                <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-700">
-                  <span>Pergantian Kode Otomatis:</span>
-                  <span className="text-pink-600 font-black">{tokenDetails.secondsRemaining}s</span>
-                </div>
-                <div className="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
-                    style={{ width: `${100 - tokenDetails.progressPercent}%` }}
+            {currentSession.isActive ? (
+              <div className="p-6 sm:p-8 rounded-3xl bg-white border-8 border-pink-500 shadow-2xl shadow-pink-500/30 flex flex-col items-center max-w-md w-full">
+                {qrCodeDataUrl ? (
+                  <img
+                    src={qrCodeDataUrl}
+                    alt="QR Code Proyektor"
+                    className="w-72 h-72 sm:w-88 sm:h-88 object-contain"
                   />
+                ) : (
+                  <div className="w-72 h-72 sm:w-88 sm:h-88 flex items-center justify-center text-slate-400">
+                    <RefreshCw className="w-10 h-10 animate-spin" />
+                  </div>
+                )}
+
+                <div className="w-full mt-4 pt-3 border-t border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono font-bold text-slate-700">
+                    <span>Pergantian Kode Otomatis:</span>
+                    <span className="text-pink-600 font-black">{tokenDetails.secondsRemaining}s</span>
+                  </div>
+                  <div className="w-full h-2.5 rounded-full bg-slate-200 overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-pink-500 to-purple-600 transition-all duration-1000 ease-linear rounded-full"
+                      style={{ width: `${100 - tokenDetails.progressPercent}%` }}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
-            <p className="text-sm font-semibold text-slate-300">
-              Buka menu <strong>Absensi Siswa</strong> &gt; Arahkan kamera ke layar untuk absen otomatis.
-            </p>
+            ) : (
+              <div className="p-8 sm:p-12 rounded-3xl bg-[#140e2d] border-2 border-red-500/40 text-center space-y-4 max-w-md w-full shadow-2xl">
+                <XCircle className="w-16 h-16 text-red-400 mx-auto" />
+                <h3 className="text-xl sm:text-2xl font-black text-white">Sesi Presensi Telah Ditutup</h3>
+                <p className="text-sm text-slate-300">
+                  Presensi untuk sesi ini telah berakhir. Kode QR dinonaktifkan.
+                </p>
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => handleReopenSession(currentSession.id)}
+                    className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer shadow-lg transition-all flex items-center gap-2"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Buka Kembali Sesi</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsProjectorFullscreen(false)}
+                    className="px-5 py-2.5 rounded-xl bg-[#221845] hover:bg-[#2e205c] border border-[#372663] text-white font-bold text-xs cursor-pointer shadow-lg transition-all"
+                  >
+                    Tutup Layar Penuh
+                  </button>
+                </div>
+              </div>
+            )}
+            {currentSession.isActive && (
+              <p className="text-sm font-semibold text-slate-300">
+                Buka menu <strong>Absensi Siswa</strong> &gt; Arahkan kamera ke layar untuk absen otomatis.
+              </p>
+            )}
           </div>
 
           {/* Footer summary */}

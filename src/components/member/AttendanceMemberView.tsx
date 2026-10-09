@@ -50,7 +50,7 @@ export const AttendanceMemberView: React.FC = () => {
   const educatorType = resolveEducatorType(currentUser, currentClass);
   const terms = getTerminology(educatorType);
 
-  // Find active session for this member's class (or any active session open currently)
+  // Find active session for this member's class
   const targetClassId = currentClass?.id || currentUser?.classId || '';
   const activeSession = React.useMemo(() => {
     const classMatch = attendanceSessions.find((s) => {
@@ -58,8 +58,11 @@ export const AttendanceMemberView: React.FC = () => {
       return isClassMatch && s.isActive;
     });
     if (classMatch) return classMatch;
-    // Fallback: any currently active session in the database
-    return attendanceSessions.find((s) => s.isActive) || null;
+    // Only fallback if member has no assigned class at all
+    if (!targetClassId) {
+      return attendanceSessions.find((s) => s.isActive) || null;
+    }
+    return null;
   }, [attendanceSessions, targetClassId, currentClass]);
 
   // Current member's record for the active session
