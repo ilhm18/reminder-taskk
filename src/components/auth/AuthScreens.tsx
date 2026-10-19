@@ -4,7 +4,9 @@ import {
   ArrowRight,
   Bell,
   Building2,
+  Check,
   CheckCircle2,
+  ChevronRight,
   Crown,
   Eye,
   EyeOff,
@@ -326,28 +328,33 @@ export const AuthScreens: React.FC = () => {
         {/* ========================================================================= */}
         {rolePortal === 'member' && (
           <div>
-            {/* QUICK ACCOUNT SWITCHER / DEVICE SESSIONS LIST */}
+            {/* QUICK ACCOUNT SWITCHER / DEVICE SESSIONS LIST (PERMANEN PER PERANGKAT) */}
             {deviceAccounts.length > 0 && (
               <div className="mb-5 p-5 rounded-2xl bg-[#191530]/80 border border-[#2c2250] shadow-xl relative overflow-hidden animate-in fade-in duration-200">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-pink-500/5 rounded-full blur-2xl pointer-events-none" />
-                <h3 className="text-xs font-bold text-slate-300 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
-                  <span>Sesi Login Sebelumnya di Perangkat Ini</span>
-                </h3>
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                <div className="flex items-center justify-between mb-3 gap-2">
+                  <h3 className="text-xs font-bold text-slate-300 uppercase tracking-widest flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-pink-500 animate-pulse" />
+                    <span>Sesi Login Sebelumnya di Perangkat Ini</span>
+                  </h3>
+                  <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 px-2 py-0.5 rounded-full flex items-center gap-1 shrink-0">
+                    <Check className="w-3 h-3" />
+                    <span>Tersimpan Permanen</span>
+                  </span>
+                </div>
+                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
                   {deviceAccounts.map((acc) => {
                     const isOwner = acc.role === 'owner';
                     const isAdmin = acc.role === 'admin';
                     return (
-                      <div
+                      <button
                         key={acc.id}
-                        className="p-3 rounded-xl bg-[#0f0c1f] hover:bg-[#141029]/80 border border-[#2b2154] hover:border-pink-500/40 flex items-center justify-between gap-3 transition-all group"
+                        type="button"
+                        onClick={() => loginAsStoredAccount(acc)}
+                        className="w-full p-3 rounded-xl bg-[#0f0c1f] hover:bg-[#141029] border border-[#2b2154] hover:border-pink-500/60 flex items-center justify-between gap-3 transition-all cursor-pointer group text-left shadow-sm active:scale-[0.99] focus:outline-none focus:ring-1 focus:ring-pink-500/50"
+                        title={`Masuk langsung sebagai ${acc.name}`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => loginAsStoredAccount(acc)}
-                          className="flex-1 flex items-center gap-3 text-left cursor-pointer focus:outline-none"
-                        >
+                        <div className="flex items-center gap-3 min-w-0">
                           <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white shadow-sm shrink-0 ${
                             isOwner
                               ? 'bg-gradient-to-tr from-amber-500 to-yellow-600'
@@ -359,7 +366,7 @@ export const AuthScreens: React.FC = () => {
                           </div>
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-xs font-bold text-white truncate max-w-[120px]">{acc.name}</span>
+                              <span className="text-xs font-bold text-white truncate max-w-[160px] group-hover:text-pink-300 transition-colors">{acc.name}</span>
                               <span className={`px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-wider ${
                                 isOwner
                                   ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
@@ -374,16 +381,17 @@ export const AuthScreens: React.FC = () => {
                               {acc.className || 'RemindTask Portal'}
                             </span>
                           </div>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => removeStoredAccount(acc.id)}
-                          className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
-                          title="Hapus sesi dari perangkat ini"
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-semibold text-pink-400/90 hidden sm:inline-block group-hover:text-pink-300 transition-colors">
+                            Masuk
+                          </span>
+                          <div className="w-7 h-7 rounded-lg bg-pink-500/10 group-hover:bg-pink-500/20 border border-pink-500/20 group-hover:border-pink-500/40 flex items-center justify-center text-pink-400 group-hover:text-pink-300 transition-all group-hover:translate-x-0.5">
+                            <ChevronRight className="w-4 h-4" />
+                          </div>
+                        </div>
+                      </button>
                     );
                   })}
                 </div>

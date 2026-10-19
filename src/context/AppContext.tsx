@@ -747,38 +747,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   });
 
-  const [deviceAccounts, setDeviceAccounts] = useState<User[]>(() => {
-    try {
-      const saved = localStorage.getItem('remindtask_device_accounts');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          // Filter to only keep member/siswa accounts
-          return parsed.filter((acc) => acc && acc.role === 'member');
-        }
-      }
-    } catch {}
-    return [];
-  });
-
-  useEffect(() => {
-    if (currentUser && currentUser.role === 'member') {
-      setDeviceAccounts((prev) => {
-        let updated = prev.filter(
-          (acc) =>
-            acc.id !== currentUser.id &&
-            !(acc.name === currentUser.name && acc.classId === currentUser.classId)
-        );
-        updated = [currentUser, ...updated];
-        const slice = updated.slice(0, 8);
-        try {
-          localStorage.setItem('remindtask_device_accounts', JSON.stringify(slice));
-        } catch {}
-        return slice;
-      });
-    }
-  }, [currentUser]);
-
   const [currentClassId, setCurrentClassId] = useState<string>(() => {
     try {
       const savedUser = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
@@ -792,6 +760,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return '';
     }
   });
+
+  const [deviceAccounts, setDeviceAccounts] = useState<User[]>(() => {
+    try {
+      const saved = localStorage.getItem('remindtask_device_accounts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          // Filter to keep member/siswa accounts permanently stored on device
+          return parsed.filter((acc) => acc && (acc.role === 'member' || !acc.role));
+        }
+      }
+    } catch {}
+    return [];
+  });
+
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'member') {
+      setDeviceAccounts((prev) => {
+        const existing = prev.find(
+          (acc) =>
+            acc.id === currentUser.id ||
+            (acc.name?.toLowerCase() === currentUser.name?.toLowerCase() && acc.classId === currentUser.classId)
+        );
+        const resolvedClassName = currentUser.className || existing?.className || (currentClassId ? classes.find(c => c.id === currentClassId)?.name : '') || '';
+        const userToStore: User = {
+          ...currentUser,
+          className: resolvedClassName || currentUser.className || '',
+        };
+        const updated = [
+          userToStore,
+          ...prev.filter(
+            (acc) =>
+              acc.id !== currentUser.id &&
+              !(acc.name?.toLowerCase() === currentUser.name?.toLowerCase() && acc.classId === currentUser.classId)
+          ),
+        ];
+        const slice = updated.slice(0, 30);
+        try {
+          localStorage.setItem('remindtask_device_accounts', JSON.stringify(slice));
+        } catch {}
+        return slice;
+      });
+    }
+  }, [currentUser, currentClassId, classes]);
+
+  // Enrich stored device accounts with class names whenever classes are loaded
+  useEffect(() => {
+    if (classes.length > 0) {
+      setDeviceAccounts((prev) => {
+        let changed = false;
+        const updated = prev.map((acc) => {
+          if (!acc.className && acc.classId) {
+            const matched = classes.find((c) => c.id === acc.classId);
+            if (matched) {
+              changed = true;
+              return { ...acc, className: matched.name };
+            }
+          }
+          return acc;
+        });
+        if (changed) {
+          try {
+            localStorage.setItem('remindtask_device_accounts', JSON.stringify(updated));
+          } catch {}
+          return updated;
+        }
+        return prev;
+      });
+    }
+  }, [classes]);
 
   const [activeTab, setActiveTab] = useState<string>(() => {
     try {
